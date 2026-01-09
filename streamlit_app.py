@@ -289,7 +289,38 @@ is_cloud = (
 
 if not st.session_state.gee_authenticated and not st.session_state.gee_init_attempted:
     st.session_state.gee_init_attempted = True
-    if not is_cloud:
+    
+    # First, try to initialize from Streamlit secrets (for cloud deployment)
+    if is_cloud:
+        try:
+            # Check if GEE credentials are in Streamlit secrets
+            if hasattr(st, 'secrets') and 'gee_credentials' in st.secrets:
+                import google.oauth2.service_account
+                
+                # Get credentials from secrets
+                gee_creds = dict(st.secrets['gee_credentials'])
+                
+                credentials = google.oauth2.service_account.Credentials.from_service_account_info(
+                    gee_creds,
+                    scopes=['https://www.googleapis.com/auth/earthengine']
+                )
+                
+                # Get project ID from credentials or secrets
+                project_id = gee_creds.get('project_id')
+                if not project_id and 'gee_project' in st.secrets:
+                    project_id = st.secrets['gee_project']
+                
+                if project_id:
+                    ee.Initialize(credentials, project=project_id, opt_url='https://earthengine-highvolume.googleapis.com')
+                else:
+                    ee.Initialize(credentials, opt_url='https://earthengine-highvolume.googleapis.com')
+                
+                st.session_state.gee_authenticated = True
+                st.session_state.gee_auth_method = 'streamlit_secrets'
+        except Exception as e:
+            # Store error for display but don't crash
+            st.session_state.gee_error = str(e)[:200]
+    else:
         # Only try auto-initialize locally (cloud has no local credentials)
         try:
             success, method = try_auto_initialize()
