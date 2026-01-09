@@ -135,11 +135,9 @@ def initialize_with_refresh_token(cred_data, project_id=None):
 def initialize_with_credentials_content(credentials_content: str, project_id: str = None):
     """Initialize Earth Engine from the uploaded credentials file content.
 
-    This follows the approach used in GeoClimate-Fetcher:
-    - If the uploaded JSON looks like a service account key (has "private_key" and "client_email"),
-      use service account initialization.
-    - Otherwise, assume it's the user credentials file created by `earthengine authenticate` (named
-      "credentials") and write it to `~/.config/earthengine/credentials`, then call `ee.Initialize`.
+    Handles both:
+    - Service account key files (has "private_key" and "client_email")
+    - User credentials files created by `earthengine authenticate` (has "refresh_token")
 
     Returns (success: bool, error: Optional[str])
     """
@@ -150,36 +148,56 @@ def initialize_with_credentials_content(credentials_content: str, project_id: st
         # Service account key file
         if isinstance(creds_data, dict) and ('private_key' in creds_data and 'client_email' in creds_data):
             try:
-                import google.auth.service_account
-                credentials = google.auth.service_account.Credentials.from_service_account_info(
+                import google.oauth2.service_account
+                credentials = google.oauth2.service_account.Credentials.from_service_account_info(
                     creds_data,
                     scopes=['https://www.googleapis.com/auth/earthengine']
                 )
-                if project_id:
-                    ee.Initialize(credentials, project=project_id)
+                proj_id = project_id or creds_data.get('project_id')
+                if proj_id:
+                    ee.Initialize(credentials, project=proj_id, opt_url='https://earthengine-highvolume.googleapis.com')
                 else:
-                    ee.Initialize(credentials)
+                    ee.Initialize(credentials, opt_url='https://earthengine-highvolume.googleapis.com')
+                # Store in session for persistence
+                st.session_state.gee_project_used = proj_id
                 return True, None
             except Exception as sa_err:
                 return False, f"Service account init failed: {str(sa_err)[:120]}"
 
-        # Otherwise treat as user credentials (the file named 'credentials')
-        try:
-            ee_creds_dir = os.path.expanduser('~/.config/earthengine')
-            os.makedirs(ee_creds_dir, exist_ok=True)
-            ee_creds_path = os.path.join(ee_creds_dir, 'credentials')
-            # Write the uploaded content verbatim
-            with open(ee_creds_path, 'w', encoding='utf-8') as f:
-                f.write(credentials_content)
-
-            # Initialize EE (it will discover the credentials file)
-            if project_id:
-                ee.Initialize(project=project_id)
-            else:
-                ee.Initialize()
-            return True, None
-        except Exception as write_err:
-            return False, f"Failed to write/init credentials: {str(write_err)[:120]}"
+        # User OAuth credentials (has refresh_token)
+        elif isinstance(creds_data, dict) and 'refresh_token' in creds_data:
+            try:
+                import google.oauth2.credentials
+                
+                # Use the OAuth client info from the credentials file if present,
+                # otherwise use the standard Earth Engine OAuth client
+                client_id = creds_data.get('client_id', '517222506229-vsmmajv5gipbgpkq0jvlg5830gon1p60.apps.googleusercontent.com')
+                client_secret = creds_data.get('client_secret', 'd-FL95Q19q7MQmFJt7KUw2N7')
+                
+                credentials = google.oauth2.credentials.Credentials(
+                    token=None,
+                    refresh_token=creds_data['refresh_token'],
+                    token_uri='https://oauth2.googleapis.com/token',
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    scopes=['https://www.googleapis.com/auth/earthengine']
+                )
+                
+                if project_id:
+                    ee.Initialize(credentials, project=project_id, opt_url='https://earthengine-highvolume.googleapis.com')
+                    st.session_state.gee_project_used = project_id
+                else:
+                    ee.Initialize(credentials, opt_url='https://earthengine-highvolume.googleapis.com')
+                
+                # Store credentials content in session for re-auth on rerun
+                st.session_state.gee_credentials_content = credentials_content
+                st.session_state.gee_project_id = project_id
+                return True, None
+            except Exception as oauth_err:
+                return False, f"OAuth init failed: {str(oauth_err)[:120]}"
+        
+        else:
+            return False, "Unrecognized credential format. Need refresh_token or service account."
 
     except json.JSONDecodeError:
         return False, "Uploaded file is not valid JSON"
@@ -290,8 +308,21 @@ is_cloud = (
 if not st.session_state.gee_authenticated and not st.session_state.gee_init_attempted:
     st.session_state.gee_init_attempted = True
     
-    # First, try to initialize from Streamlit secrets (for cloud deployment)
-    if is_cloud:
+    # First, try to re-authenticate from session state (for Streamlit reruns)
+    if 'gee_credentials_content' in st.session_state and 'gee_project_id' in st.session_state:
+        try:
+            success, error = initialize_with_credentials_content(
+                st.session_state.gee_credentials_content,
+                st.session_state.gee_project_id
+            )
+            if success:
+                st.session_state.gee_authenticated = True
+                st.session_state.gee_auth_method = 'cached_credentials'
+        except Exception:
+            pass  # Fall through to manual auth
+    
+    # If still not authenticated, try Streamlit secrets (for cloud deployment)
+    if not st.session_state.gee_authenticated and is_cloud:
         # Debug: Check for secrets
         secrets_found = False
         gee_creds = None
