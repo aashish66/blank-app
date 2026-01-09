@@ -636,7 +636,187 @@ def calculate_index_for_image(_image, index_name, sensor):
 
 
 # =============================================================================
-# SIDEBAR - Navigation
+# LOGIN-FIRST APPROACH: Block app until authenticated on cloud
+# =============================================================================
+if is_cloud and not st.session_state.gee_authenticated:
+    # Show dedicated authentication page
+    st.markdown("""
+    <style>
+    @keyframes float {
+        0% { transform: translateY(0px); }
+        50% { transform: translateY(-15px); }
+        100% { transform: translateY(0px); }
+    }
+    .auth-hero {
+        text-align: center;
+        padding: 3rem 2rem;
+        background: linear-gradient(135deg, #1a5f2a 0%, #2e8b3e 50%, #4ade80 100%);
+        border-radius: 20px;
+        color: white;
+        margin: 1rem 0 2rem 0;
+        box-shadow: 0 15px 40px rgba(46, 139, 62, 0.3);
+    }
+    .auth-icon {
+        font-size: 4rem;
+        margin-bottom: 1rem;
+        animation: float 4s ease-in-out infinite;
+        display: inline-block;
+    }
+    .auth-title {
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin-bottom: 0.5rem;
+    }
+    .auth-subtitle {
+        font-size: 1.1rem;
+        opacity: 0.95;
+        margin-bottom: 1.5rem;
+    }
+    .auth-badge {
+        display: inline-block;
+        background: rgba(255, 255, 255, 0.2);
+        padding: 0.5rem 1.5rem;
+        border-radius: 50px;
+        font-size: 0.9rem;
+    }
+    </style>
+    <div class="auth-hero">
+        <div class="auth-icon">🌾</div>
+        <div class="auth-title">AgriVision Pro</div>
+        <div class="auth-subtitle">Agricultural Vegetation Analysis powered by Google Earth Engine</div>
+        <div class="auth-badge">🔐 Authentication Required</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("## 🔐 Google Earth Engine Authentication")
+    st.info("To use this application, you need to authenticate with Google Earth Engine using your own credentials.")
+    
+    # Initialize project ID
+    if 'gee_project_id' not in st.session_state:
+        st.session_state.gee_project_id = ''
+    
+    # Project ID input
+    project_id = st.text_input(
+        "📋 Your GEE Project ID:",
+        value=st.session_state.gee_project_id,
+        placeholder="e.g., ee-yourproject",
+        help="Required. Find this in your Google Cloud Console or GEE Code Editor."
+    )
+    st.session_state.gee_project_id = project_id
+    
+    if not project_id:
+        st.warning("⚠️ Project ID is required")
+    
+    st.markdown("---")
+    
+    # Authentication method tabs
+    auth_tab1, auth_tab2 = st.tabs(["📁 Upload Credentials File (Recommended)", "💻 Local Development"])
+    
+    with auth_tab1:
+        st.markdown("### Upload Your Earth Engine Credentials")
+        
+        import platform
+        system = platform.system()
+        if system == "Windows":
+            creds_path = f"C:\\Users\\[USERNAME]\\.config\\earthengine\\credentials"
+        elif system == "Darwin":
+            creds_path = "~/.config/earthengine/credentials"
+        else:
+            creds_path = "~/.config/earthengine/credentials"
+        
+        st.info(f"""
+        📂 **Your credentials file is at:**
+        `{creds_path}`
+        
+        **Tip:** Copy this path, navigate to it in your file explorer, and upload the `credentials` file below.
+        """)
+        
+        uploaded_file = st.file_uploader(
+            "Upload Earth Engine Credentials File",
+            type=None,
+            help="Upload the file named 'credentials' (no extension) from the path above"
+        )
+        
+        with st.expander("📋 First time? How to get your credentials file"):
+            st.markdown("""
+            **Prerequisites:**
+            - Google Earth Engine Account → [Sign up FREE](https://earthengine.google.com/signup/)
+            - Python installed → [python.org](https://python.org)
+            
+            **One-Time Setup:**
+            1. Open Terminal/Command Prompt
+            2. Install Earth Engine API:
+               ```bash
+               pip install earthengine-api
+               ```
+            3. Authenticate:
+               ```bash
+               earthengine authenticate
+               ```
+            4. Follow the browser link and log in
+            5. Your credentials file is now saved locally
+            6. Upload it here to use this app!
+            """)
+        
+        if uploaded_file is not None:
+            try:
+                raw = uploaded_file.read()
+                if isinstance(raw, bytes):
+                    credentials_content = raw.decode('utf-8')
+                else:
+                    credentials_content = str(raw)
+                
+                st.success("✅ Credentials file loaded!")
+                
+                if st.button("🚀 Connect to Google Earth Engine", type="primary", disabled=not project_id, use_container_width=True):
+                    with st.spinner("🔄 Authenticating..."):
+                        success, error = initialize_with_credentials_content(credentials_content, project_id)
+                        if success:
+                            st.session_state.gee_authenticated = True
+                            st.session_state.gee_auth_method = "uploaded_credentials"
+                            st.success("✅ Successfully authenticated!")
+                            st.balloons()
+                            import time
+                            time.sleep(2)
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Authentication failed: {error}")
+            except Exception as e:
+                st.error(f"❌ Error reading file: {str(e)[:100]}")
+    
+    with auth_tab2:
+        st.markdown("### Local Development Only")
+        st.warning("""
+        ⚠️ **This method only works if you:**
+        - Are running the app locally with `streamlit run streamlit_app.py`
+        - Have already run `earthengine authenticate` on your machine
+        
+        **If using the hosted website, use the "Upload Credentials File" tab instead.**
+        """)
+        
+        if st.button("Try Local Authentication", disabled=not project_id, use_container_width=True):
+            with st.spinner("🔄 Checking local credentials..."):
+                success, method = try_auto_initialize()
+                if success:
+                    st.session_state.gee_authenticated = True
+                    st.session_state.gee_auth_method = method or 'local_credentials'
+                    st.success("✅ Authenticated using local credentials!")
+                    st.rerun()
+                else:
+                    st.error("❌ Local authentication failed. Please use the Upload method on cloud.")
+    
+    # Show any errors
+    if 'gee_error' in st.session_state:
+        st.error(f"Authentication error: {st.session_state.gee_error}")
+    
+    st.markdown("---")
+    st.info("🌍 **Once authenticated**, you'll have access to satellite vegetation analysis, image comparison, and more!")
+    
+    # Stop here - don't show the rest of the app until authenticated
+    st.stop()
+
+# =============================================================================
+# SIDEBAR - Navigation (only shown after authentication)
 # =============================================================================
 st.sidebar.title("🌾 AgriVision Pro")
 st.sidebar.markdown("Satellite & Drone Vegetation Analysis")
@@ -681,32 +861,67 @@ if st.session_state.gee_authenticated:
 else:
     # Not authenticated - show authentication options
     st.sidebar.warning("⚠️ Not Connected")
-    st.sidebar.info("**You need a Google Earth Engine account** to use this app.")
     
-    # Project ID input (required for GEE)
-    project_id = st.sidebar.text_input(
-        "📋 Your GEE Project ID:",
-        value=st.session_state.gee_project_id,
-        placeholder="e.g., ee-yourproject",
-        help="Required. Find this in your GEE Console."
-    )
-    st.session_state.gee_project_id = project_id
-    
-    if not project_id:
-        st.sidebar.caption("⚠️ Project ID required")
-    
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**🔑 Authentication Options**")
+    # Show debug info on cloud
+    if is_cloud:
+        st.sidebar.error("🔒 **Streamlit Cloud Detected**")
+        
+        # Show secrets debug info
+        if 'secrets_debug' in st.session_state:
+            st.sidebar.caption(st.session_state.secrets_debug)
+        if 'secrets_project' in st.session_state:
+            st.sidebar.caption(f"Project from secrets: {st.session_state.secrets_project}")
+        if 'gee_error' in st.session_state:
+            st.sidebar.error(f"Error: {st.session_state.gee_error}")
+        
+        st.sidebar.markdown("""
+        **Setup Required:**
+        1. Go to **Manage app** → **Settings** → **Secrets**
+        2. Add your GEE service account credentials in TOML format:
+        
+        ```toml
+        [gee_credentials]
+        type = "service_account"
+        project_id = "your-project-id"
+        private_key = "..."
+        client_email = "..."
+        ```
+        3. Save and **Reboot app**
+        """)
+        
+        if st.sidebar.button("🔄 Retry Authentication"):
+            st.session_state.gee_init_attempted = False
+            st.session_state.gee_authenticated = False
+            if 'gee_error' in st.session_state:
+                del st.session_state['gee_error']
+            st.rerun()
+    else:
+        # Local environment - show manual auth options
+        st.sidebar.info("**You need a Google Earth Engine account** to use this app.")
+        
+        # Project ID input (required for GEE)
+        project_id = st.sidebar.text_input(
+            "📋 Your GEE Project ID:",
+            value=st.session_state.gee_project_id,
+            placeholder="e.g., ee-yourproject",
+            help="Required. Find this in your GEE Console."
+        )
+        st.session_state.gee_project_id = project_id
+        
+        if not project_id:
+            st.sidebar.caption("⚠️ Project ID required")
+        
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("**🔑 Authentication Options**")
 
-    auth_method = st.sidebar.radio(
-        "Choose authentication method:",
-        [
-            "🏠 Local (run `earthengine authenticate` on this machine)",
-            "📁 Upload Credentials File",
-            "📝 Paste Refresh Token"
-        ],
-        key="auth_method_select"
-    )
+        auth_method = st.sidebar.radio(
+            "Choose authentication method:",
+            [
+                "🏠 Local (run `earthengine authenticate` on this machine)",
+                "📁 Upload Credentials File"
+            ],
+            key="auth_method_select"
+        )
 
     st.sidebar.markdown("---")
 
@@ -760,45 +975,13 @@ else:
             except Exception as e:
                 st.sidebar.error(f"❌ Error reading file: {str(e)[:100]}")
 
-    else:  # Paste refresh token
-        st.sidebar.caption("Paste your refresh token (from `earthengine authenticate --auth_mode=notebook`)")
-        refresh_token = st.sidebar.text_area(
-            "Paste your refresh token:",
-            placeholder="1//0...",
-            height=100,
-            label_visibility="collapsed"
-        )
-
-        if refresh_token.strip():
-            st.sidebar.success(f"✅ Token pasted ({len(refresh_token)} chars)")
-            if st.sidebar.button("🔗 Connect to Google Earth Engine", type="primary", use_container_width=True, disabled=not project_id):
-                with st.spinner("🔄 Connecting..."):
-                    cred_data = {
-                        "refresh_token": refresh_token.strip(),
-                        "token_uri": "https://oauth2.googleapis.com/token",
-                        "client_id": "517222506229-vsmmajv5gipbgpkq0jvlg5830gon1p60.apps.googleusercontent.com",
-                        "client_secret": "d-FL95Q19q7MQmFJt7KUw2N7"
-                    }
-                    st.session_state.uploaded_credentials = cred_data
-                    success, error = initialize_with_refresh_token(cred_data, project_id)
-                    if success:
-                        st.session_state.gee_authenticated = True
-                        st.session_state.gee_auth_method = "refresh_token"
-                        st.sidebar.success("✅ Successfully authenticated!")
-                        st.balloons()
-                        st.rerun()
-                    else:
-                        st.sidebar.error("❌ Connection failed")
-                        st.sidebar.error(f"Error: {error}")
-
     st.sidebar.markdown("---")
 
     # Help / guidance
     with st.sidebar.expander("❓ Credentials Help"):
         st.markdown("""
-        - Local: run `earthengine authenticate` on the machine running this app.
-        - Upload: Upload the file named `credentials` created by `earthengine authenticate`.
-        - Paste: Use a refresh token obtained via `earthengine authenticate --auth_mode=notebook`.
+        - **Local**: Run `earthengine authenticate` on the machine running this app.
+        - **Upload**: Upload the file named `credentials` created by `earthengine authenticate`.
         """)
     
     # Show error if any
