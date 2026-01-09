@@ -292,34 +292,55 @@ if not st.session_state.gee_authenticated and not st.session_state.gee_init_atte
     
     # First, try to initialize from Streamlit secrets (for cloud deployment)
     if is_cloud:
+        # Debug: Check for secrets
+        secrets_found = False
+        gee_creds = None
+        
         try:
-            # Check if GEE credentials are in Streamlit secrets
-            if hasattr(st, 'secrets') and 'gee_credentials' in st.secrets:
+            # Try different secret formats
+            if hasattr(st, 'secrets'):
+                # Format 1: Nested TOML [gee_credentials] section
+                if 'gee_credentials' in st.secrets:
+                    gee_creds = dict(st.secrets['gee_credentials'])
+                    secrets_found = True
+                # Format 2: JSON string in gee_service_account
+                elif 'gee_service_account' in st.secrets:
+                    gee_creds = json.loads(st.secrets['gee_service_account'])
+                    secrets_found = True
+                # Format 3: Individual keys at root level
+                elif 'private_key' in st.secrets and 'client_email' in st.secrets:
+                    gee_creds = dict(st.secrets)
+                    secrets_found = True
+        except Exception as e:
+            st.session_state.gee_error = f"Error reading secrets: {str(e)[:100]}"
+        
+        st.session_state.secrets_debug = f"Cloud: True, Secrets found: {secrets_found}"
+        
+        if secrets_found and gee_creds:
+            try:
                 import google.oauth2.service_account
                 
-                # Get credentials from secrets
-                gee_creds = dict(st.secrets['gee_credentials'])
+                # Debug: Show project being used
+                project_id = gee_creds.get('project_id', 'NOT FOUND')
+                st.session_state.secrets_project = project_id
                 
                 credentials = google.oauth2.service_account.Credentials.from_service_account_info(
                     gee_creds,
                     scopes=['https://www.googleapis.com/auth/earthengine']
                 )
                 
-                # Get project ID from credentials or secrets
-                project_id = gee_creds.get('project_id')
-                if not project_id and 'gee_project' in st.secrets:
-                    project_id = st.secrets['gee_project']
-                
-                if project_id:
+                if project_id and project_id != 'NOT FOUND':
                     ee.Initialize(credentials, project=project_id, opt_url='https://earthengine-highvolume.googleapis.com')
+                    st.session_state.gee_authenticated = True
+                    st.session_state.gee_auth_method = 'streamlit_secrets'
+                    st.session_state.gee_project_used = project_id
                 else:
-                    ee.Initialize(credentials, opt_url='https://earthengine-highvolume.googleapis.com')
-                
-                st.session_state.gee_authenticated = True
-                st.session_state.gee_auth_method = 'streamlit_secrets'
-        except Exception as e:
-            # Store error for display but don't crash
-            st.session_state.gee_error = str(e)[:200]
+                    st.session_state.gee_error = "No project_id found in secrets"
+            except Exception as e:
+                # Store error for display
+                st.session_state.gee_error = f"Secrets init failed: {str(e)[:200]}"
+        elif not secrets_found:
+            st.session_state.gee_error = "No GEE credentials found in Streamlit secrets. Add [gee_credentials] section."
     else:
         # Only try auto-initialize locally (cloud has no local credentials)
         try:
@@ -639,6 +660,10 @@ if st.session_state.gee_authenticated:
         st.sidebar.caption("📁 Using uploaded credentials")
     elif auth_method in ["local_credentials", "default", "already_initialized"]:
         st.sidebar.caption("🏠 Using local credentials")
+    elif auth_method == "streamlit_secrets":
+        st.sidebar.caption("🔑 Using Streamlit Secrets")
+        if 'gee_project_used' in st.session_state:
+            st.sidebar.caption(f"Project: {st.session_state.gee_project_used}")
     elif auth_method == "oauth":
         st.sidebar.caption("🌐 Using OAuth")
     else:
