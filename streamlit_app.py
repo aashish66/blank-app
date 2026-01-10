@@ -1192,10 +1192,8 @@ if page == "🛰️ Satellite Analysis":
     if 'confirmed_aoi' in st.session_state and st.session_state.confirmed_aoi is not None:
         st.markdown("**📍 Your Area of Interest:**")
         preview_map = geemap.Map(center=st.session_state.aoi_center, zoom=11)
-        # Create an outline image from the AOI geometry
-        aoi_fc = ee.FeatureCollection([ee.Feature(st.session_state.confirmed_aoi)])
-        aoi_outline = ee.Image().byte().paint(featureCollection=aoi_fc, color=1, width=2)
-        preview_map.addLayer(aoi_outline, {'palette': ['blue']}, 'AOI Boundary')
+        # Add geometry directly with styling (no server-side image creation)
+        preview_map.addLayer(st.session_state.confirmed_aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI Boundary')
         preview_map.centerObject(st.session_state.confirmed_aoi)
         preview_map.to_streamlit(height=300)
     
@@ -1362,10 +1360,8 @@ if page == "🛰️ Satellite Analysis":
                 
                 # Create result map
                 result_map = geemap.Map(center=st.session_state.aoi_center, zoom=12)
-                # Create an outline image from the AOI geometry
-                aoi_fc = ee.FeatureCollection([ee.Feature(confirmed_aoi)])
-                aoi_outline = ee.Image().byte().paint(featureCollection=aoi_fc, color=1, width=2)
-                result_map.addLayer(aoi_outline, {'palette': ['blue']}, 'AOI Boundary')
+                # Add geometry directly with styling (no server-side image creation)
+                result_map.addLayer(confirmed_aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI Boundary')
                 result_map.addLayer(index_image, vis_params, f'{selected_index}{title_suffix}')
                 result_map.centerObject(confirmed_aoi)
                 result_map.to_streamlit(height=500)
@@ -1727,10 +1723,8 @@ elif page == "🔄 Compare Images":
     if 'compare_confirmed_aoi' in st.session_state and st.session_state.compare_confirmed_aoi is not None:
         st.markdown("**📍 Your Area of Interest:**")
         cmp_preview_map = geemap.Map(center=st.session_state.compare_aoi_center, zoom=11)
-        # Create an outline image from the AOI geometry
-        aoi_fc = ee.FeatureCollection([ee.Feature(st.session_state.compare_confirmed_aoi)])
-        aoi_outline = ee.Image().byte().paint(featureCollection=aoi_fc, color=1, width=2)
-        cmp_preview_map.addLayer(aoi_outline, {'palette': ['blue']}, 'AOI Boundary')
+        # Add geometry directly with styling (no server-side image creation)
+        cmp_preview_map.addLayer(st.session_state.compare_confirmed_aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI Boundary')
         cmp_preview_map.centerObject(st.session_state.compare_confirmed_aoi)
         cmp_preview_map.to_streamlit(height=250)
         aoi = st.session_state.compare_confirmed_aoi
@@ -2050,10 +2044,8 @@ elif page == "🔄 Compare Images":
                     diff = idx2.subtract(idx1).rename('Difference')
                     diff_vis = {'min': -0.3, 'max': 0.3, 'palette': ['red', 'white', 'green']}
                     m3.addLayer(diff, diff_vis, 'NDVI Change')
-                    # Create an outline image from the AOI geometry
-                    aoi_fc = ee.FeatureCollection([ee.Feature(aoi)])
-                    aoi_outline = ee.Image().byte().paint(featureCollection=aoi_fc, color=1, width=2)
-                    m3.addLayer(aoi_outline, {'palette': ['blue']}, 'AOI')
+                    # Add geometry directly with styling (no server-side image creation)
+                    m3.addLayer(aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI')
                     m3.centerObject(aoi)
                     m3.to_streamlit(height=400)
                     
