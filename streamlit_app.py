@@ -64,6 +64,69 @@ from pathlib import Path
 
 # No longer using OAuth - credentials file upload only
 
+def ensure_ee_initialized():
+    """
+    Ensure Earth Engine is properly initialized before any EE operations.
+    This is critical for Streamlit Cloud where sessions can become stale.
+    Pattern from GeoClimate-Fetcher: test with ee.Number(1).getInfo() and reinit if needed.
+    Returns True if EE is ready, False otherwise.
+    """
+    # Get project ID from session state
+    project_id = st.session_state.get('gee_project_id', None)
+    
+    try:
+        # Quick test to see if EE is ready
+        ee.Number(1).getInfo()
+        return True
+    except Exception:
+        # Not initialized or credentials issue - try to reinitialize
+        try:
+            # Try to reinitialize with stored credentials content
+            if 'gee_credentials_content' in st.session_state and st.session_state.gee_credentials_content:
+                creds_content = st.session_state.gee_credentials_content
+                creds_data = json.loads(creds_content) if isinstance(creds_content, str) else creds_content
+                
+                # Service account credentials
+                if 'private_key' in creds_data and 'client_email' in creds_data:
+                    import google.oauth2.service_account
+                    credentials = google.oauth2.service_account.Credentials.from_service_account_info(
+                        creds_data,
+                        scopes=['https://www.googleapis.com/auth/earthengine']
+                    )
+                    proj = project_id or creds_data.get('project_id')
+                    if proj:
+                        ee.Initialize(credentials, project=proj)
+                    else:
+                        ee.Initialize(credentials)
+                    return True
+                
+                # OAuth refresh token credentials
+                elif 'refresh_token' in creds_data:
+                    import google.oauth2.credentials
+                    credentials = google.oauth2.credentials.Credentials(
+                        token=None,
+                        refresh_token=creds_data['refresh_token'],
+                        token_uri='https://oauth2.googleapis.com/token',
+                        client_id='517222506229-vsmmajv5gipbgpkq0jvlg5830gon1p60.apps.googleusercontent.com',
+                        client_secret='d-FL95Q19q7MQmFJt7KUw2N7',
+                        scopes=['https://www.googleapis.com/auth/earthengine']
+                    )
+                    if project_id:
+                        ee.Initialize(credentials, project=project_id)
+                    else:
+                        ee.Initialize(credentials)
+                    return True
+            
+            # Fallback: try simple reinit with project
+            if project_id:
+                ee.Initialize(project=project_id)
+            else:
+                ee.Initialize()
+            return True
+        except Exception as init_error:
+            return False
+    return False
+
 def initialize_with_refresh_token(cred_data, project_id=None):
     """Initialize GEE using refresh token or service account credentials from uploaded file"""
     try:
@@ -801,6 +864,8 @@ if is_cloud and not st.session_state.gee_authenticated:
                         if success:
                             st.session_state.gee_authenticated = True
                             st.session_state.gee_auth_method = "uploaded_credentials"
+                            # Store credentials for re-initialization (critical for Streamlit Cloud)
+                            st.session_state.gee_credentials_content = credentials_content
                             st.success("✅ Successfully authenticated!")
                             st.balloons()
                             import time
@@ -993,6 +1058,8 @@ else:
                         if success:
                             st.session_state.gee_authenticated = True
                             st.session_state.gee_auth_method = "uploaded_credentials"
+                            # Store credentials for re-initialization (critical for Streamlit Cloud)
+                            st.session_state.gee_credentials_content = credentials_content
                             st.sidebar.success("✅ Successfully authenticated!")
                             st.balloons()
                             st.rerun()
@@ -1191,11 +1258,15 @@ if page == "🛰️ Satellite Analysis":
     # Show AOI preview map
     if 'confirmed_aoi' in st.session_state and st.session_state.confirmed_aoi is not None:
         st.markdown("**📍 Your Area of Interest:**")
-        preview_map = geemap.Map(center=st.session_state.aoi_center, zoom=11)
-        # Add geometry directly with styling (no server-side image creation)
-        preview_map.addLayer(st.session_state.confirmed_aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI Boundary')
-        preview_map.centerObject(st.session_state.confirmed_aoi)
-        preview_map.to_streamlit(height=300)
+        # Ensure EE is initialized before map operations (critical for Streamlit Cloud)
+        if ensure_ee_initialized():
+            preview_map = geemap.Map(center=st.session_state.aoi_center, zoom=11)
+            # Add geometry directly with styling (no server-side image creation)
+            preview_map.addLayer(st.session_state.confirmed_aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI Boundary')
+            preview_map.centerObject(st.session_state.confirmed_aoi)
+            preview_map.to_streamlit(height=300)
+        else:
+            st.error("❌ GEE session expired. Please re-authenticate using the sidebar.")
     
     st.markdown("---")
     
@@ -1722,11 +1793,15 @@ elif page == "🔄 Compare Images":
     # Show AOI preview map
     if 'compare_confirmed_aoi' in st.session_state and st.session_state.compare_confirmed_aoi is not None:
         st.markdown("**📍 Your Area of Interest:**")
-        cmp_preview_map = geemap.Map(center=st.session_state.compare_aoi_center, zoom=11)
-        # Add geometry directly with styling (no server-side image creation)
-        cmp_preview_map.addLayer(st.session_state.compare_confirmed_aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI Boundary')
-        cmp_preview_map.centerObject(st.session_state.compare_confirmed_aoi)
-        cmp_preview_map.to_streamlit(height=250)
+        # Ensure EE is initialized before map operations (critical for Streamlit Cloud)
+        if ensure_ee_initialized():
+            cmp_preview_map = geemap.Map(center=st.session_state.compare_aoi_center, zoom=11)
+            # Add geometry directly with styling (no server-side image creation)
+            cmp_preview_map.addLayer(st.session_state.compare_confirmed_aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI Boundary')
+            cmp_preview_map.centerObject(st.session_state.compare_confirmed_aoi)
+            cmp_preview_map.to_streamlit(height=250)
+        else:
+            st.error("❌ GEE session expired. Please re-authenticate using the sidebar.")
         aoi = st.session_state.compare_confirmed_aoi
     
     st.markdown("---")
