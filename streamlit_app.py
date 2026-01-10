@@ -441,7 +441,23 @@ if not st.session_state.gee_authenticated and not st.session_state.gee_init_atte
         except Exception:
             pass  # Silently fail on cloud
 
-gee_available = st.session_state.gee_authenticated
+# Verify GEE is actually working (not just that we think we authenticated)
+# This catches cases where the session becomes stale on Streamlit Cloud
+gee_available = False
+if st.session_state.gee_authenticated:
+    try:
+        # Quick test to verify EE connection is alive
+        ee.Number(1).getInfo()
+        gee_available = True
+    except Exception as e:
+        # Connection is stale - reset authentication
+        st.session_state.gee_authenticated = False
+        st.session_state.gee_init_attempted = False  # Allow retry
+        if 'gee_credentials_content' in st.session_state:
+            # Try to re-initialize with stored credentials
+            if ensure_ee_initialized():
+                gee_available = True
+                st.session_state.gee_authenticated = True
 
 # =============================================================================
 # SESSION STATE - Store user selections
