@@ -1106,7 +1106,6 @@ page = st.sidebar.radio(
     ["🛰️ Satellite Analysis", 
      "🔄 Compare Images",
      "📷 Upload Image", 
-     "📊 Visitor Stats",
      "❓ Help"]
 )
 
@@ -1460,37 +1459,7 @@ if page == "🛰️ Satellite Analysis":
                 **Legend:** 🔴 Low vegetation (-0.2) → 🟡 Moderate → 🟢 High vegetation (0.8)
                 """)
                 
-                # Download options
-                st.markdown("---")
-                st.subheader("💾 Download Image")
-                col_dl1, col_dl2 = st.columns(2)
-                
-                with col_dl1:
-                    if st.button("📥 Download as PNG", key="dl_png_sat"):
-                        try:
-                            # Get the thumbnail URL
-                            url = index_image.getThumbURL({
-                                'min': -0.2, 'max': 0.8,
-                                'palette': ['d73027', 'fc8d59', 'fee08b', 'd9ef8b', '91cf60', '1a9850'],
-                                'dimensions': 512,
-                                'format': 'png'
-                            })
-                            st.markdown(f"[🔗 Click here to download PNG]({url})")
-                        except Exception as e:
-                            st.error(f"Error generating PNG: {str(e)}")
-                
-                with col_dl2:
-                    if st.button("📥 Download as GeoTIFF", key="dl_tiff_sat"):
-                        try:
-                            url = index_image.getDownloadURL({
-                                'scale': 30,
-                                'crs': 'EPSG:4326',
-                                'fileFormat': 'GeoTIFF',
-                                'region': confirmed_aoi
-                            })
-                            st.markdown(f"[🔗 Click here to download GeoTIFF]({url})")
-                        except Exception as e:
-                            st.error(f"Error generating GeoTIFF: {str(e)}")
+
                 
             except Exception as e:
                 st.error(f"Error: {str(e)}")
@@ -2377,61 +2346,7 @@ elif page == "❓ Help":
     | NDRE | Crop health (Sentinel-2) |
     """)
 
-# =============================================================================
-# PAGE 5: VISITOR STATS
-# =============================================================================
-elif page == "📊 Visitor Stats":
-    st.title("📊 Visitor Analytics")
-    st.markdown("Track how many people have used this app")
-    
-    try:
-        stats = get_visit_stats()
-        
-        # Summary metrics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Visits", stats['total'])
-        with col2:
-            today = datetime.date.today().strftime('%Y-%m-%d')
-            today_visits = stats['daily'].get(today, 0)
-            st.metric("Today", today_visits)
-        with col3:
-            this_month = datetime.date.today().strftime('%Y-%m')
-            month_visits = stats['monthly'].get(this_month, 0)
-            st.metric("This Month", month_visits)
-        
-        st.markdown("---")
-        
-        # View selector
-        view_type = st.radio("View by:", ["Daily", "Monthly", "Yearly"], horizontal=True)
-        
-        if view_type == "Daily":
-            data = stats['daily']
-            title = "Daily Visits (Last 30 days)"
-        elif view_type == "Monthly":
-            data = stats['monthly']
-            title = "Monthly Visits"
-        else:
-            data = stats['yearly']
-            title = "Yearly Visits"
-        
-        if data:
-            # Convert to DataFrame for chart
-            df = pd.DataFrame(list(data.items()), columns=['Date', 'Visits'])
-            df = df.sort_values('Date')
-            
-            # Show chart
-            st.subheader(title)
-            st.bar_chart(df.set_index('Date'))
-            
-            # Show data table
-            with st.expander("📋 View Data Table"):
-                st.dataframe(df, use_container_width=True)
-        else:
-            st.info("No visit data available yet. Come back later!")
-    except Exception as e:
-        st.error(f"Error loading analytics: {str(e)}")
-        st.info("Analytics data may be unavailable")
+
 
 # =============================================================================
 # FOOTER

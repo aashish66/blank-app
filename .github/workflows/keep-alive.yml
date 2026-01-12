@@ -1,0 +1,33 @@
+name: Keep App Alive
+
+on:
+  schedule:
+    # Run every 12 hours to prevent Streamlit Cloud from sleeping
+    - cron: '0 */12 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Update timestamp file
+        run: |
+          echo "Last keep-alive: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" > .last_keepalive
+      
+      - name: Commit and push if changed
+        run: |
+          git add .last_keepalive
+          git diff --staged --quiet || git commit -m "chore: keep-alive commit [skip ci]"
+          git push || echo "Nothing to push"
