@@ -609,6 +609,76 @@ def parse_shapefile_zip(uploaded_zip):
         return None
 
 
+def get_scale_for_area(aoi=None, buffer_km=10, sensor="Sentinel-2"):
+    """
+    Calculate optimal scale based on AOI area and sensor for GEE computations.
+    
+    GEE has computation limits - larger areas need coarser resolution.
+    Different sensors have different native resolutions:
+    - Sentinel-2: 10m
+    - Landsat: 30m
+    - MODIS: 250-500m
+    
+    Args:
+        aoi: ee.Geometry object (optional)
+        buffer_km: Fallback buffer size in km
+        sensor: Sensor type for native resolution adjustment
+    
+    Returns:
+        Optimal scale in meters
+    """
+    # Calculate area
+    area_sqkm = None
+    if aoi is not None:
+        try:
+            area_sqm = aoi.area().getInfo()
+            area_sqkm = area_sqm / 1e6
+        except Exception:
+            pass
+    
+    # Fallback: estimate from buffer size
+    if area_sqkm is None:
+        area_sqkm = 3.14159 * buffer_km * buffer_km
+    
+    # Native resolutions by sensor
+    if "MODIS" in sensor:
+        # MODIS is already coarse (250-500m), can handle larger areas easily
+        if area_sqkm < 1000:
+            return 250
+        elif area_sqkm < 10000:
+            return 500
+        elif area_sqkm < 50000:
+            return 1000
+        else:
+            return 2000
+    
+    # For Sentinel-2 and Landsat - be more aggressive with scaling
+    if area_sqkm < 50:
+        return 30  # Native resolution for very small areas
+    elif area_sqkm < 200:
+        return 100
+    elif area_sqkm < 500:
+        return 250
+    elif area_sqkm < 1500:
+        return 500
+    elif area_sqkm < 5000:
+        return 1000
+    elif area_sqkm < 20000:
+        return 1500
+    else:
+        return 2000  # Very large areas - use very coarse resolution
+
+
+def get_area_sqkm(aoi):
+    """Get area in square kilometers for warnings/info."""
+    try:
+        area_sqm = aoi.area().getInfo()
+        return area_sqm / 1e6
+    except:
+        return None
+
+
+
 @st.cache_data(ttl=3600, show_spinner="Searching for images...")
 def get_image_list(sensor, start_date, end_date, _aoi, max_cloud=100):
     """Get list of available images with metadata (limited to 100 for performance)"""
@@ -928,6 +998,8 @@ if is_cloud and not st.session_state.gee_authenticated:
 # =============================================================================
 st.sidebar.title("🌾 AgriVision Pro")
 st.sidebar.markdown("Satellite & Drone Vegetation Analysis")
+# App Views Counter
+st.sidebar.markdown('![Visitors](https://visitor-badge.laobi.icu/badge?page_id=agrivision-pro.streamlit.app)')
 st.sidebar.markdown("---")
 
 # =============================================================================
@@ -1169,6 +1241,13 @@ if page == "🛰️ Satellite Analysis":
     # -------------------------------------------------------------------------
     st.subheader("1️⃣ Define Area of Interest")
     
+    # Warning about large areas
+    st.info("""💡 **Tips for Best Results:**
+    - **Small areas (< 20km buffer)** work best with Sentinel-2 and Landsat
+    - **Large areas (> 50km)**: Use **MODIS** sensor or try **Median Composite** mode
+    - If map shows empty/partial data, reduce area size or switch to MODIS
+    """)
+    
     aoi_method = st.radio(
         "How to define your area:",
         ["📍 Coordinates + Buffer", "📁 Upload File (GeoJSON/Shapefile)", "✏️ Draw on Map"],
@@ -1265,10 +1344,23 @@ if page == "🛰️ Satellite Analysis":
     
     # AOI Preview Map with Confirm Button
     if aoi is not None:
+        # Calculate and store scale based on method
+        if aoi_method == "📍 Coordinates + Buffer":
+            current_buffer = buffer_km
+        else:
+            # For uploaded/drawn areas, estimate based on a default (can be adjusted)
+            current_buffer = 20  # Assume medium size for non-buffer methods
+        
+        # Show warning for very large areas
+        if current_buffer > 40:
+            st.warning(f"⚠️ Large area selected ({current_buffer}km buffer). Visualization may be coarser. For better resolution, use smaller areas.")
+        
         if st.button("✅ Confirm AOI & Show on Map", type="primary"):
             st.session_state.confirmed_aoi = aoi
             st.session_state.aoi_center = map_center
-            st.success("✅ Area of Interest confirmed!")
+            st.session_state.aoi_buffer_km = current_buffer
+            st.session_state.aoi_scale = get_scale_for_area(current_buffer)
+            st.success(f"✅ Area of Interest confirmed! (Scale: {st.session_state.aoi_scale}m)")
     
     # Show AOI preview map
     if 'confirmed_aoi' in st.session_state and st.session_state.confirmed_aoi is not None:
@@ -1438,27 +1530,74 @@ if page == "🛰️ Satellite Analysis":
                 # Calculate index
                 index_image = calculate_index_for_image(image, selected_index, sensor)
                 
-                # Visualization
+                # Calculate optimal scale from actual AOI area (sensor-aware)
+                scale = get_scale_for_area(aoi=confirmed_aoi, buffer_km=st.session_state.get('aoi_buffer_km', 20), sensor=sensor)
+                
+                # Get dynamic min/max using percentiles
+                stats = index_image.reduceRegion(
+                    reducer=ee.Reducer.percentile([5, 95]),
+                    geometry=confirmed_aoi,
+                    scale=scale,
+                    maxPixels=1e9
+                ).getInfo()
+                
+                # Get the band name from the index image
+                band_name = index_image.bandNames().getInfo()[0]
+                
+                # Check if stats are empty (indicates no data coverage)
+                vmin_raw = stats.get(f'{band_name}_p5') or stats.get(f'{selected_index}_p5')
+                vmax_raw = stats.get(f'{band_name}_p95') or stats.get(f'{selected_index}_p95')
+                
+                if vmin_raw is None or vmax_raw is None:
+                    st.warning("""⚠️ **No data found for this area!** This usually means:
+                    1. The satellite scenes don't fully cover your area
+                    2. Cloud cover removed all valid pixels
+                    
+                    **Try these solutions:**
+                    - Use **Median Composite** mode (combines multiple images)
+                    - Reduce buffer/area size
+                    - Switch to **MODIS** sensor (better coverage for large areas)
+                    - Extend date range to include more images
+                    """)
+                    vmin = -0.2
+                    vmax = 0.8
+                else:
+                    vmin = vmin_raw
+                    vmax = vmax_raw
+                
+                # Visualization with explicit bands parameter (required for proper rendering)
                 vis_params = {
-                    'min': -0.2, 'max': 0.8,
+                    'bands': [band_name],
+                    'min': vmin, 
+                    'max': vmax,
                     'palette': ['#d73027', '#fc8d59', '#fee08b', '#d9ef8b', '#91cf60', '#1a9850']
                 }
                 
                 # Create result map
                 result_map = geemap.Map(center=st.session_state.aoi_center, zoom=12)
-                # Add geometry directly with styling (no server-side image creation)
-                result_map.addLayer(confirmed_aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI Boundary')
+                
+                # Add index layer FIRST (so it's at the bottom)
                 result_map.addLayer(index_image, vis_params, f'{selected_index}{title_suffix}')
+                
+                # Create outline-only AOI boundary (no fill)
+                # Use ee.Image.paint to create a boundary line
+                empty = ee.Image().byte()
+                aoi_outline = empty.paint(
+                    featureCollection=ee.FeatureCollection([ee.Feature(confirmed_aoi)]),
+                    color=1,
+                    width=3
+                )
+                result_map.addLayer(aoi_outline, {'palette': ['blue']}, 'AOI Boundary')
+                
                 result_map.centerObject(confirmed_aoi)
                 result_map.to_streamlit(height=500)
                 
-                st.success(f"✅ {selected_index} map generated successfully!")
+                st.success(f"✅ {selected_index} map generated successfully! (Resolution: {scale}m)")
                 
-                # Legend
-                st.markdown("""
-                **Legend:** 🔴 Low vegetation (-0.2) → 🟡 Moderate → 🟢 High vegetation (0.8)
+                # Legend with actual values
+                st.markdown(f"""
+                **Legend:** 🔴 Low ({vmin:.2f}) → 🟡 Moderate → 🟢 High ({vmax:.2f})
                 """)
-                
 
                 
             except Exception as e:
@@ -1481,23 +1620,29 @@ if page == "🛰️ Satellite Analysis":
                         dates = []
                         values = []
                         
+                        # Calculate scale from actual AOI area (sensor-aware)
+                        ts_scale = get_scale_for_area(aoi=confirmed_aoi, buffer_km=st.session_state.get('aoi_buffer_km', 20), sensor=sensor)
+                        
                         for img_info in st.session_state.available_images[:20]:  # Limit to 20 for performance
                             img = get_single_image(sensor, img_info['id'], confirmed_aoi)
                             if img is not None:
                                 idx_img = calculate_index_for_image(img, selected_index, sensor)
-                                # Calculate mean value over AOI
+                                # Get band name from index image
+                                band_names = idx_img.bandNames().getInfo()
+                                band_name = band_names[0] if band_names else selected_index
+                                # Calculate mean value over AOI with calculated scale
                                 mean_val = idx_img.reduceRegion(
                                     reducer=ee.Reducer.mean(),
                                     geometry=confirmed_aoi,
-                                    scale=30,
+                                    scale=ts_scale,
                                     maxPixels=1e9
                                 ).getInfo()
                                 
-                                if selected_index in mean_val or 'NDVI' in mean_val:
-                                    val = mean_val.get(selected_index, mean_val.get('NDVI'))
-                                    if val is not None:
-                                        dates.append(img_info['date'])
-                                        values.append(val)
+                                # Get value using actual band name
+                                val = mean_val.get(band_name) or mean_val.get(selected_index) or mean_val.get('NDVI')
+                                if val is not None:
+                                    dates.append(img_info['date'])
+                                    values.append(val)
                         
                         if dates and values:
                             # Create DataFrame
@@ -1595,15 +1740,22 @@ if page == "🛰️ Satellite Analysis":
                             idx_img_1 = calculate_index_for_image(image, compare_index_1, sensor)
                             idx_img_2 = calculate_index_for_image(image, compare_index_2, sensor)
                             
+                            # Get band names
+                            band_name_1 = idx_img_1.bandNames().getInfo()[0]
+                            band_name_2 = idx_img_2.bandNames().getInfo()[0]
+                            
+                            # Calculate scale from actual AOI area (sensor-aware)
+                            compare_scale = get_scale_for_area(aoi=confirmed_aoi, buffer_km=st.session_state.get('aoi_buffer_km', 20), sensor=sensor)
+                            
                             # Get statistics for both indices
                             stats_1 = idx_img_1.reduceRegion(
                                 reducer=ee.Reducer.mean().combine(ee.Reducer.minMax(), sharedInputs=True),
-                                geometry=confirmed_aoi, scale=30, maxPixels=1e9
+                                geometry=confirmed_aoi, scale=compare_scale, maxPixels=1e9
                             ).getInfo()
                             
                             stats_2 = idx_img_2.reduceRegion(
                                 reducer=ee.Reducer.mean().combine(ee.Reducer.minMax(), sharedInputs=True),
-                                geometry=confirmed_aoi, scale=30, maxPixels=1e9
+                                geometry=confirmed_aoi, scale=compare_scale, maxPixels=1e9
                             ).getInfo()
                             
                             # Display side-by-side maps
@@ -1624,28 +1776,36 @@ if page == "🛰️ Satellite Analysis":
                             with col_m1:
                                 st.markdown(f"**{compare_index_1}**")
                                 map1 = geemap.Map(center=map_center, zoom=12, basemap="SATELLITE")
-                                map1.addLayer(idx_img_1, {'min': -1, 'max': 1, 'palette': ['red', 'yellow', 'green']}, compare_index_1)
+                                # Use bands parameter for proper rendering
+                                map1.addLayer(idx_img_1, {'bands': [band_name_1], 'min': -1, 'max': 1, 'palette': ['red', 'yellow', 'green']}, compare_index_1)
                                 map1.centerObject(confirmed_aoi)
                                 map1.to_streamlit(height=400)
                                 
-                                # Stats
-                                st.metric("Mean", f"{stats_1.get(f'{compare_index_1}_mean', 0):.3f}")
+                                # Stats with proper None handling
+                                mean1 = stats_1.get(f'{band_name_1}_mean') or 0
+                                min1 = stats_1.get(f'{band_name_1}_min') or 0
+                                max1 = stats_1.get(f'{band_name_1}_max') or 0
+                                st.metric("Mean", f"{mean1:.3f}")
                                 col_min, col_max = st.columns(2)
-                                col_min.metric("Min", f"{stats_1.get(f'{compare_index_1}_min', 0):.3f}")
-                                col_max.metric("Max", f"{stats_1.get(f'{compare_index_1}_max', 0):.3f}")
+                                col_min.metric("Min", f"{min1:.3f}")
+                                col_max.metric("Max", f"{max1:.3f}")
                             
                             with col_m2:
                                 st.markdown(f"**{compare_index_2}**")
                                 map2 = geemap.Map(center=map_center, zoom=12, basemap="SATELLITE")
-                                map2.addLayer(idx_img_2, {'min': -1, 'max': 1, 'palette': ['red', 'yellow', 'green']}, compare_index_2)
+                                # Use bands parameter for proper rendering
+                                map2.addLayer(idx_img_2, {'bands': [band_name_2], 'min': -1, 'max': 1, 'palette': ['red', 'yellow', 'green']}, compare_index_2)
                                 map2.centerObject(confirmed_aoi)
                                 map2.to_streamlit(height=400)
                                 
-                                # Stats
-                                st.metric("Mean", f"{stats_2.get(f'{compare_index_2}_mean', 0):.3f}")
+                                # Stats with proper None handling
+                                mean2 = stats_2.get(f'{band_name_2}_mean') or 0
+                                min2 = stats_2.get(f'{band_name_2}_min') or 0
+                                max2 = stats_2.get(f'{band_name_2}_max') or 0
+                                st.metric("Mean", f"{mean2:.3f}")
                                 col_min, col_max = st.columns(2)
-                                col_min.metric("Min", f"{stats_2.get(f'{compare_index_2}_min', 0):.3f}")
-                                col_max.metric("Max", f"{stats_2.get(f'{compare_index_2}_max', 0):.3f}")
+                                col_min.metric("Min", f"{min2:.3f}")
+                                col_max.metric("Max", f"{max2:.3f}")
                             
                             # Interpretation guide
                             with st.expander("📖 Interpretation Guide"):
