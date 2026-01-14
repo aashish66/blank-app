@@ -1,7 +1,5 @@
 # =============================================================================
-# AgriVision Pro - Dependencies
-# =============================================================================
-# Pinned versions for Streamlit Cloud compatibility
+# AgriVision Pro - Streamlit Cloud Compatible Dependencies
 # =============================================================================
 
 # Core Streamlit framework
@@ -11,20 +9,14 @@ streamlit==1.32.0
 geemap==0.32.0
 earthengine-api==0.1.390
 
-# Map visualization (critical for AOI display)
+# Map visualization
 folium==0.15.1
 streamlit-folium==0.17.4
-leafmap==0.30.0
 
-# Geospatial data handling
-geopandas==0.14.3
-shapely==2.0.2
-pyproj==3.6.1
-fiona==1.9.5
-
-# Data processing
+# Data processing (these install cleanly on Streamlit Cloud)
 numpy==1.26.4
 pandas==2.1.4
+geopandas==0.14.3
 
 # Image processing
 Pillow==10.2.0
@@ -33,11 +25,5 @@ matplotlib==3.8.2
 # HTTP requests
 requests==2.31.0
 
-# Widget support (required for geemap on Streamlit Cloud)
-ipywidgets==8.1.1
-ipyleaflet==0.18.2
-
-# Performance optimization
+# Performance
 cachetools==5.3.2
-
-# Note: rasterio removed as it can cause build issues on Streamlit Cloud
