@@ -1,29 +1,17 @@
 # =============================================================================
-# AgriVision Pro - Streamlit Cloud Compatible Dependencies
+# AgriVision Pro - Streamlit Cloud Dependencies
 # =============================================================================
+# Using flexible versions for Python 3.13 compatibility
 
-# Core Streamlit framework
-streamlit==1.32.0
-
-# Google Earth Engine integration
-geemap==0.32.0
-earthengine-api==0.1.390
-
-# Map visualization
-folium==0.15.1
-streamlit-folium==0.17.4
-
-# Data processing (these install cleanly on Streamlit Cloud)
-numpy==1.26.4
-pandas==2.1.4
-geopandas==0.14.3
-
-# Image processing
-Pillow==10.2.0
-matplotlib==3.8.2
-
-# HTTP requests
-requests==2.31.0
-
-# Performance
-cachetools==5.3.2
+streamlit
+geemap
+earthengine-api
+folium
+streamlit-folium
+numpy
+pandas
+geopandas
+Pillow
+matplotlib
+requests
+cachetools
