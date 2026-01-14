@@ -822,12 +822,21 @@ def display_ee_map(center, zoom, ee_image, vis_params, layer_name, aoi=None, hei
         # Add layer control
         folium.LayerControl(position='topright').add_to(m)
         
-        # Generate unique key for this map
-        import hashlib
-        map_key = f"map_{hashlib.md5(layer_name.encode()).hexdigest()[:8]}_{height}"
+        # Render map using HTML components (most reliable on Streamlit Cloud)
+        from streamlit.components.v1 import html
         
-        # Use st_folium for interactive map
-        st_folium(m, width=None, height=height, returned_objects=[], key=map_key)
+        # Get the HTML representation of the map
+        map_html = m._repr_html_()
+        
+        # Wrap in a div with explicit dimensions
+        html_content = f"""
+        <div style="width:100%; height:{height}px;">
+            {map_html}
+        </div>
+        """
+        
+        # Display using HTML component
+        html(html_content, height=height + 20)
         
         if gee_layer_added:
             st.caption(f"✅ {layer_name} layer loaded")
