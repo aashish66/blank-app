@@ -1513,29 +1513,92 @@ if page == "🛰️ Satellite Analysis":
             # For uploaded/drawn areas, estimate based on a default (can be adjusted)
             current_buffer = 20  # Assume medium size for non-buffer methods
         
-        # Show warning for very large areas
-        if current_buffer > 40:
-            st.warning(f"⚠️ Large area selected ({current_buffer}km buffer). Visualization may be coarser. For better resolution, use smaller areas.")
-        
         if st.button("✅ Confirm AOI & Show on Map", type="primary"):
             st.session_state.confirmed_aoi = aoi
             st.session_state.aoi_center = map_center
             st.session_state.aoi_buffer_km = current_buffer
-            st.session_state.aoi_scale = get_scale_for_area(current_buffer)
-            st.success(f"✅ Area of Interest confirmed! (Scale: {st.session_state.aoi_scale}m)")
+            st.success("✅ Area of Interest confirmed!")
     
-    # Show AOI preview map
+    # Show AOI preview map with area display and reset button
     if 'confirmed_aoi' in st.session_state and st.session_state.confirmed_aoi is not None:
         st.markdown("**📍 Your Area of Interest:**")
-        # Ensure EE is initialized before map operations (critical for Streamlit Cloud)
+        
+        # Calculate and display area
+        try:
+            area_sqm = st.session_state.confirmed_aoi.area().getInfo()
+            area_sqkm = area_sqm / 1e6
+            st.session_state.aoi_area_sqkm = area_sqkm
+            
+            # Display area with appropriate warning
+            if area_sqkm > 5000:
+                st.error(f"⚠️ **Very Large Area: {area_sqkm:,.0f} km²** - Use MODIS sensor and 500m+ resolution for best performance")
+            elif area_sqkm > 1000:
+                st.warning(f"⚠️ **Large Area: {area_sqkm:,.0f} km²** - Consider using MODIS or higher resolution (250m+) for faster processing")
+            elif area_sqkm > 200:
+                st.info(f"📍 **Area: {area_sqkm:,.0f} km²** - Tip: Use 100m+ resolution for faster results")
+            else:
+                st.caption(f"📍 Area: {area_sqkm:,.1f} km²")
+        except:
+            pass
+        
+        # Use Folium for reliable AOI preview (V2 style)
         if ensure_ee_initialized():
-            preview_map = geemap.Map(center=st.session_state.aoi_center, zoom=11)
-            # Add geometry directly with styling (no server-side image creation)
-            preview_map.addLayer(st.session_state.confirmed_aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI Boundary')
-            preview_map.centerObject(st.session_state.confirmed_aoi)
-            preview_map.to_streamlit(height=300)
+            try:
+                preview_center = st.session_state.get('aoi_center', [39.0, -98.0])
+                
+                # Create Folium map
+                m = folium.Map(location=preview_center, zoom_start=10, tiles='OpenStreetMap')
+                
+                # Add satellite basemap
+                folium.TileLayer(
+                    tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                    attr='Esri',
+                    name='Satellite'
+                ).add_to(m)
+                
+                # Add AOI boundary
+                aoi_geojson = st.session_state.confirmed_aoi.getInfo()
+                
+                # Fit bounds to AOI
+                coords = aoi_geojson.get('coordinates', [[]])
+                if aoi_geojson.get('type') == 'Polygon':
+                    coords = coords[0]
+                elif aoi_geojson.get('geodesic'):  # Circle buffer
+                    coords = aoi_geojson.get('coordinates', [[]])[0]
+                
+                if coords and len(coords) > 0:
+                    lats = [c[1] for c in coords if len(c) >= 2]
+                    lons = [c[0] for c in coords if len(c) >= 2]
+                    if lats and lons:
+                        m.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
+                
+                folium.GeoJson(
+                    aoi_geojson,
+                    name='Study Area',
+                    style_function=lambda x: {
+                        'fillColor': '#3388ff',
+                        'color': '#0066FF',
+                        'weight': 3,
+                        'fillOpacity': 0.1
+                    }
+                ).add_to(m)
+                
+                folium.LayerControl().add_to(m)
+                st_folium(m, width=700, height=300, key="aoi_preview_sat", returned_objects=[])
+                
+            except Exception as e:
+                st.warning(f"Preview unavailable: {str(e)[:50]}")
         else:
             st.error("❌ GEE session expired. Please re-authenticate using the sidebar.")
+        
+        # Reset AOI button
+        if st.button("🔄 Change AOI", key="reset_aoi_sat"):
+            del st.session_state['confirmed_aoi']
+            if 'aoi_center' in st.session_state:
+                del st.session_state['aoi_center']
+            if 'aoi_area_sqkm' in st.session_state:
+                del st.session_state['aoi_area_sqkm']
+            st.rerun()
     
     st.markdown("---")
     
@@ -1588,6 +1651,26 @@ if page == "🛰️ Satellite Analysis":
     with col_c2:
         if composite_option != "Individual Image":
             st.info(f"Will use {composite_option.split()[0].lower()} of all images in date range")
+    
+    # Add resolution control for user to choose
+    st.markdown("**Resolution Settings (for large areas):**")
+    col_r1, col_r2 = st.columns([2, 3])
+    with col_r1:
+        # Get default resolution based on sensor
+        default_res = {"Sentinel-2": 30, "Landsat 8/9": 30, "Landsat 5/7": 30, "MODIS": 250}.get(sensor, 30)
+        user_resolution = st.select_slider(
+            "Processing Resolution (m):",
+            options=[10, 20, 30, 50, 100, 250, 500, 1000, 2000],
+            value=default_res,
+            key="user_resolution_slider"
+        )
+    with col_r2:
+        st.info(f"""
+        **Tip:** For faster processing:
+        - Small areas (<50 km²): 10-30m
+        - Medium areas (50-500 km²): 100-250m
+        - Large areas (>500 km²): 500-2000m
+        """)
     
     st.markdown("---")
     
@@ -1692,8 +1775,8 @@ if page == "🛰️ Satellite Analysis":
                 # Calculate index
                 index_image = calculate_index_for_image(image, selected_index, sensor)
                 
-                # Calculate optimal scale from actual AOI area (sensor-aware)
-                scale = get_scale_for_area(aoi=confirmed_aoi, buffer_km=st.session_state.get('aoi_buffer_km', 20), sensor=sensor)
+                # Use user-selected resolution (from slider above)
+                scale = user_resolution
                 
                 # Get dynamic min/max using percentiles
                 stats = index_image.reduceRegion(
@@ -1765,7 +1848,7 @@ if page == "🛰️ Satellite Analysis":
                 st.error(f"Error: {str(e)}")
     
     # -------------------------------------------------------------------------
-    # SECTION 5: Time Series Analysis
+    # SECTION 5: Time Series Analysis (V2 Style with Plotly)
     # -------------------------------------------------------------------------
     if 'available_images' in st.session_state and st.session_state.available_images and confirmed_aoi:
         st.markdown("---")
@@ -1777,21 +1860,28 @@ if page == "🛰️ Satellite Analysis":
             if st.button("📊 Generate Time Series Chart", type="primary"):
                 with st.spinner("Calculating time series..."):
                     try:
+                        import plotly.express as px
+                        import plotly.graph_objects as go
+                        from scipy import stats
+                        
                         # Calculate index for all images
                         dates = []
                         values = []
                         
-                        # Calculate scale from actual AOI area (sensor-aware)
-                        ts_scale = get_scale_for_area(aoi=confirmed_aoi, buffer_km=st.session_state.get('aoi_buffer_km', 20), sensor=sensor)
+                        # Use user-selected resolution
+                        ts_scale = user_resolution
                         
-                        for img_info in st.session_state.available_images[:20]:  # Limit to 20 for performance
+                        progress_bar = st.progress(0)
+                        total_images = min(20, len(st.session_state.available_images))
+                        
+                        for i, img_info in enumerate(st.session_state.available_images[:total_images]):
+                            progress_bar.progress((i + 1) / total_images)
                             img = get_single_image(sensor, img_info['id'], confirmed_aoi)
                             if img is not None:
                                 idx_img = calculate_index_for_image(img, selected_index, sensor)
-                                # Get band name from index image
                                 band_names = idx_img.bandNames().getInfo()
                                 band_name = band_names[0] if band_names else selected_index
-                                # Calculate mean value over AOI with calculated scale
+                                
                                 mean_val = idx_img.reduceRegion(
                                     reducer=ee.Reducer.mean(),
                                     geometry=confirmed_aoi,
@@ -1799,34 +1889,74 @@ if page == "🛰️ Satellite Analysis":
                                     maxPixels=1e9
                                 ).getInfo()
                                 
-                                # Get value using actual band name
-                                val = mean_val.get(band_name) or mean_val.get(selected_index) or mean_val.get('NDVI')
+                                val = mean_val.get(band_name) or mean_val.get(selected_index)
                                 if val is not None:
                                     dates.append(img_info['date'])
                                     values.append(val)
                         
+                        progress_bar.empty()
+                        
                         if dates and values:
-                            # Create DataFrame
                             import pandas as pd
                             df_ts = pd.DataFrame({'Date': dates, selected_index: values})
                             df_ts['Date'] = pd.to_datetime(df_ts['Date'])
                             df_ts = df_ts.sort_values('Date')
                             
-                            # Plot
-                            st.line_chart(df_ts.set_index('Date'))
+                            # Create Plotly chart with trend line (V2 style)
+                            fig = px.scatter(df_ts, x='Date', y=selected_index, 
+                                           title=f"{selected_index} Time Series",
+                                           labels={selected_index: f'{selected_index} Value'})
                             
-                            # Show statistics
-                            col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+                            # Add line connecting points
+                            fig.add_trace(go.Scatter(
+                                x=df_ts['Date'], 
+                                y=df_ts[selected_index],
+                                mode='lines',
+                                name='Trend',
+                                line=dict(color='rgba(0,128,0,0.5)', width=2)
+                            ))
+                            
+                            # Calculate and add linear trend line
+                            x_numeric = (df_ts['Date'] - df_ts['Date'].min()).dt.days.values
+                            slope, intercept, r_value, p_value, std_err = stats.linregress(x_numeric, df_ts[selected_index].values)
+                            trend_y = intercept + slope * x_numeric
+                            
+                            fig.add_trace(go.Scatter(
+                                x=df_ts['Date'],
+                                y=trend_y,
+                                mode='lines',
+                                name=f'Linear Trend (R²={r_value**2:.3f})',
+                                line=dict(color='red', dash='dash', width=2)
+                            ))
+                            
+                            fig.update_layout(
+                                xaxis_title="Date",
+                                yaxis_title=f"{selected_index} Value",
+                                hovermode='x unified',
+                                showlegend=True
+                            )
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            # Show statistics in a nice layout
+                            st.markdown("**📊 Statistics:**")
+                            col_s1, col_s2, col_s3, col_s4, col_s5 = st.columns(5)
                             col_s1.metric("Min", f"{df_ts[selected_index].min():.3f}")
                             col_s2.metric("Max", f"{df_ts[selected_index].max():.3f}")
                             col_s3.metric("Mean", f"{df_ts[selected_index].mean():.3f}")
                             col_s4.metric("Std Dev", f"{df_ts[selected_index].std():.3f}")
+                            
+                            # Trend indicator
+                            trend_direction = "📈 Increasing" if slope > 0 else "📉 Decreasing"
+                            col_s5.metric("Trend", trend_direction)
                             
                             # Show data table
                             with st.expander("📋 View Data Table"):
                                 st.dataframe(df_ts, use_container_width=True)
                         else:
                             st.warning("Could not calculate time series values")
+                    except ImportError:
+                        st.error("Please install plotly and scipy: pip install plotly scipy")
                     except Exception as e:
                         st.error(f"Error generating time series: {str(e)}")
         else:
@@ -1936,11 +2066,22 @@ if page == "🛰️ Satellite Analysis":
                             
                             with col_m1:
                                 st.markdown(f"**{compare_index_1}**")
-                                map1 = geemap.Map(center=map_center, zoom=12, basemap="SATELLITE")
-                                # Use bands parameter for proper rendering
-                                map1.addLayer(idx_img_1, {'bands': [band_name_1], 'min': -1, 'max': 1, 'palette': ['red', 'yellow', 'green']}, compare_index_1)
-                                map1.centerObject(confirmed_aoi)
-                                map1.to_streamlit(height=400)
+                                # Use display_ee_map for reliable rendering
+                                vis_params_1 = {
+                                    'bands': [band_name_1], 
+                                    'min': -0.2, 
+                                    'max': 0.8, 
+                                    'palette': ['d73027', 'fc8d59', 'fee08b', 'd9ef8b', '91cf60', '1a9850']
+                                }
+                                display_ee_map(
+                                    center=map_center,
+                                    zoom=12,
+                                    ee_image=idx_img_1,
+                                    vis_params=vis_params_1,
+                                    layer_name=compare_index_1,
+                                    aoi=confirmed_aoi,
+                                    height=350
+                                )
                                 
                                 # Stats with proper None handling
                                 mean1 = stats_1.get(f'{band_name_1}_mean') or 0
@@ -1953,11 +2094,22 @@ if page == "🛰️ Satellite Analysis":
                             
                             with col_m2:
                                 st.markdown(f"**{compare_index_2}**")
-                                map2 = geemap.Map(center=map_center, zoom=12, basemap="SATELLITE")
-                                # Use bands parameter for proper rendering
-                                map2.addLayer(idx_img_2, {'bands': [band_name_2], 'min': -1, 'max': 1, 'palette': ['red', 'yellow', 'green']}, compare_index_2)
-                                map2.centerObject(confirmed_aoi)
-                                map2.to_streamlit(height=400)
+                                # Use display_ee_map for reliable rendering
+                                vis_params_2 = {
+                                    'bands': [band_name_2], 
+                                    'min': -0.2, 
+                                    'max': 0.8, 
+                                    'palette': ['d73027', 'fc8d59', 'fee08b', 'd9ef8b', '91cf60', '1a9850']
+                                }
+                                display_ee_map(
+                                    center=map_center,
+                                    zoom=12,
+                                    ee_image=idx_img_2,
+                                    vis_params=vis_params_2,
+                                    layer_name=compare_index_2,
+                                    aoi=confirmed_aoi,
+                                    height=350
+                                )
                                 
                                 # Stats with proper None handling
                                 mean2 = stats_2.get(f'{band_name_2}_mean') or 0
@@ -2096,18 +2248,87 @@ elif page == "🔄 Compare Images":
             st.session_state.compare_aoi_center = cmp_map_center
             st.success("✅ Area of Interest confirmed!")
     
-    # Show AOI preview map
+    # Show AOI preview map with area display and reset button
     if 'compare_confirmed_aoi' in st.session_state and st.session_state.compare_confirmed_aoi is not None:
         st.markdown("**📍 Your Area of Interest:**")
-        # Ensure EE is initialized before map operations (critical for Streamlit Cloud)
+        
+        # Calculate and display area
+        try:
+            area_sqm = st.session_state.compare_confirmed_aoi.area().getInfo()
+            area_sqkm = area_sqm / 1e6
+            st.session_state.compare_aoi_area_sqkm = area_sqkm
+            
+            # Display area with warnings/tips
+            if area_sqkm > 5000:
+                st.error(f"⚠️ **Very Large Area: {area_sqkm:,.0f} km²** - Use MODIS sensor and 500m+ resolution")
+            elif area_sqkm > 1000:
+                st.warning(f"⚠️ **Large Area: {area_sqkm:,.0f} km²** - Consider using MODIS or 250m+ resolution")
+            elif area_sqkm > 200:
+                st.info(f"📍 **Area: {area_sqkm:,.0f} km²** - Tip: Use 100m+ resolution for speed")
+            else:
+                st.caption(f"📍 Area: {area_sqkm:,.1f} km²")
+        except:
+            pass
+        
+        # Use Folium for reliable AOI preview (V2 style)
         if ensure_ee_initialized():
-            cmp_preview_map = geemap.Map(center=st.session_state.compare_aoi_center, zoom=11)
-            # Add geometry directly with styling (no server-side image creation)
-            cmp_preview_map.addLayer(st.session_state.compare_confirmed_aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI Boundary')
-            cmp_preview_map.centerObject(st.session_state.compare_confirmed_aoi)
-            cmp_preview_map.to_streamlit(height=250)
+            try:
+                preview_center = st.session_state.get('compare_aoi_center', [39.0, -98.0])
+                
+                # Create Folium map
+                m = folium.Map(location=preview_center, zoom_start=10, tiles='OpenStreetMap')
+                
+                # Add satellite basemap
+                folium.TileLayer(
+                    tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                    attr='Esri',
+                    name='Satellite'
+                ).add_to(m)
+                
+                # Add AOI boundary
+                aoi_geojson = st.session_state.compare_confirmed_aoi.getInfo()
+                
+                # Fit bounds to AOI
+                coords = aoi_geojson.get('coordinates', [[]])
+                if aoi_geojson.get('type') == 'Polygon':
+                    coords = coords[0]
+                elif aoi_geojson.get('geodesic'):
+                    coords = aoi_geojson.get('coordinates', [[]])[0]
+                
+                if coords and len(coords) > 0:
+                    lats = [c[1] for c in coords if len(c) >= 2]
+                    lons = [c[0] for c in coords if len(c) >= 2]
+                    if lats and lons:
+                        m.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
+                
+                folium.GeoJson(
+                    aoi_geojson,
+                    name='Study Area',
+                    style_function=lambda x: {
+                        'fillColor': '#3388ff',
+                        'color': '#0066FF',
+                        'weight': 3,
+                        'fillOpacity': 0.1
+                    }
+                ).add_to(m)
+                
+                folium.LayerControl().add_to(m)
+                st_folium(m, width=700, height=250, key="aoi_preview_cmp", returned_objects=[])
+                
+            except Exception as e:
+                st.warning(f"Preview unavailable: {str(e)[:50]}")
         else:
-            st.error("❌ GEE session expired. Please re-authenticate using the sidebar.")
+            st.error("❌ GEE session expired. Please re-authenticate.")
+        
+        # Reset AOI button
+        if st.button("🔄 Change AOI", key="reset_aoi_cmp"):
+            del st.session_state['compare_confirmed_aoi']
+            if 'compare_aoi_center' in st.session_state:
+                del st.session_state['compare_aoi_center']
+            if 'compare_aoi_area_sqkm' in st.session_state:
+                del st.session_state['compare_aoi_area_sqkm']
+            st.rerun()
+        
         aoi = st.session_state.compare_confirmed_aoi
     
     st.markdown("---")
@@ -2146,6 +2367,20 @@ elif page == "🔄 Compare Images":
             end_date_cmp = st.date_input("End Date:", value=today_cmp, key="cmp_end")
         with col_cloud:
             cloud_cmp = st.slider("Max Cloud %:", 0, 100, 30, key="cloud_cmp")
+        
+        # Add resolution control
+        st.markdown("**Resolution Settings:**")
+        col_res1, col_res2 = st.columns([2, 3])
+        with col_res1:
+            default_res_cmp = {"Sentinel-2": 30, "Landsat 8/9": 30, "Landsat 5/7": 30, "MODIS": 250}.get(sensor_cmp, 30)
+            user_resolution_cmp = st.select_slider(
+                "Processing Resolution (m):",
+                options=[10, 20, 30, 50, 100, 250, 500, 1000, 2000],
+                value=default_res_cmp,
+                key="user_resolution_cmp"
+            )
+        with col_res2:
+            st.info("**Tip:** Higher resolution = slower but more detailed")
         
         # Search for images once
         if aoi is not None:
@@ -2364,14 +2599,19 @@ elif page == "🔄 Compare Images":
                         
                         st.markdown(title1)
                         map_center = st.session_state.get('compare_aoi_center', [39.0, -98.0])
-                        m1 = geemap.Map(center=map_center, zoom=11)
                         
                         if img1 is not None:
                             idx1 = calculate_index_for_image(img1, selected_index, sensor1)
-                            vis = {'min': -0.2, 'max': 0.8, 'palette': ['red', 'yellow', 'green']}
-                            m1.addLayer(idx1, vis, f'{selected_index} - Image 1')
-                            m1.centerObject(aoi)
-                            m1.to_streamlit(height=400)
+                            vis = {'min': -0.2, 'max': 0.8, 'palette': ['d73027', 'fc8d59', 'fee08b', 'd9ef8b', '91cf60', '1a9850']}
+                            display_ee_map(
+                                center=map_center,
+                                zoom=11,
+                                ee_image=idx1,
+                                vis_params=vis,
+                                layer_name=f'{selected_index} - Image 1',
+                                aoi=aoi,
+                                height=350
+                            )
                         else:
                             st.error("Failed to load Image 1")
                     
@@ -2409,26 +2649,34 @@ elif page == "🔄 Compare Images":
                                 title2 = f"**Median Composite**\n({sensor2})"
                         
                         st.markdown(title2)
-                        m2 = geemap.Map(center=map_center, zoom=11)
                         
                         if img2 is not None:
                             idx2 = calculate_index_for_image(img2, selected_index, sensor2)
-                            m2.addLayer(idx2, vis, f'{selected_index} - Image 2')
-                            m2.centerObject(aoi)
-                            m2.to_streamlit(height=400)
+                            display_ee_map(
+                                center=map_center,
+                                zoom=11,
+                                ee_image=idx2,
+                                vis_params=vis,
+                                layer_name=f'{selected_index} - Image 2',
+                                aoi=aoi,
+                                height=350
+                            )
                         else:
                             st.error("Failed to load Image 2")
                     
                     # Difference map
                     st.subheader("5️⃣ Difference Map (Image 2 - Image 1)")
-                    m3 = geemap.Map(center=map_center, zoom=11)
                     diff = idx2.subtract(idx1).rename('Difference')
-                    diff_vis = {'min': -0.3, 'max': 0.3, 'palette': ['red', 'white', 'green']}
-                    m3.addLayer(diff, diff_vis, 'NDVI Change')
-                    # Add geometry directly with styling (no server-side image creation)
-                    m3.addLayer(aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI')
-                    m3.centerObject(aoi)
-                    m3.to_streamlit(height=400)
+                    diff_vis = {'min': -0.3, 'max': 0.3, 'palette': ['d73027', 'ffffff', '1a9850']}
+                    display_ee_map(
+                        center=map_center,
+                        zoom=11,
+                        ee_image=diff,
+                        vis_params=diff_vis,
+                        layer_name='Change Detection',
+                        aoi=aoi,
+                        height=400
+                    )
                     
                     st.info("🟢 Green = Vegetation increased | ⚪ White = No change | 🔴 Red = Vegetation decreased")
                     
