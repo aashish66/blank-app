@@ -1,7 +1,8 @@
 # =============================================================================
 # AgriVision Pro - Streamlit Cloud Dependencies
 # =============================================================================
-# Using flexible versions for Python 3.13 compatibility
+# These packages are verified to work on Streamlit Cloud
+# No version pins = uses latest compatible with Python 3.13
 
 streamlit
 geemap
