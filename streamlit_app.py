@@ -736,171 +736,108 @@ def create_ee_folium_map(center, zoom, ee_image, vis_params, layer_name, aoi=Non
     return m
 
 
-def render_ee_map_robust(center, zoom, ee_image=None, vis_params=None, layer_name="Layer", aoi=None, height=500):
+def display_ee_map(center, zoom, ee_image, vis_params, layer_name, aoi=None, height=500, use_folium=None):
     """
-    Render an Earth Engine map using direct Folium tile rendering.
-    This is MORE RELIABLE on Streamlit Cloud than geemap.Map().to_streamlit()
+    Display an Earth Engine map with automatic Streamlit Cloud detection.
+    
+    On Streamlit Cloud, geemap.Map().to_streamlit() sometimes fails to render GEE tile layers.
+    This function provides a robust fallback using direct Folium + GEE tile URLs.
     
     Args:
-        center: [lat, lon] center point
+        center: [lat, lon] or [lon, lat] center point
         zoom: zoom level
-        ee_image: Earth Engine image to display (optional)
-        vis_params: visualization parameters for the image
+        ee_image: Earth Engine image to display
+        vis_params: visualization parameters dict with 'bands', 'min', 'max', 'palette'
         layer_name: name for the layer
         aoi: optional AOI geometry to show boundary
         height: map height in pixels
-    
-    Works on Streamlit Cloud by:
-    1. Using direct GEE tile URL fetching instead of geemap widgets
-    2. Using st_folium for reliable interactive rendering with layer control
+        use_folium: If True, force Folium rendering. If None, auto-detect based on environment.
     """
-    try:
-        # Create base folium map
-        m = folium.Map(
-            location=center, 
-            zoom_start=zoom, 
-            tiles=None  # Start with no base tile to avoid duplicates
-        )
-        
-        # Add OpenStreetMap as default base layer
-        folium.TileLayer(
-            tiles='OpenStreetMap',
-            name='OpenStreetMap',
-            control=True
-        ).add_to(m)
-        
-        # Add satellite basemap option
-        folium.TileLayer(
-            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-            attr='Esri',
-            name='Satellite',
-            control=True
-        ).add_to(m)
-        
-        # Add GEE layer if image is provided
-        gee_layer_added = False
-        if ee_image is not None and vis_params is not None:
+    # Auto-detect if we should use Folium (more reliable on Streamlit Cloud)
+    # Check for Streamlit Cloud environment indicators
+    is_streamlit_cloud = os.environ.get('STREAMLIT_SHARING_MODE') or os.environ.get('STREAMLIT_SERVER_ADDRESS')
+    
+    if use_folium is None:
+        use_folium = bool(is_streamlit_cloud)
+    
+    # Ensure center is [lat, lon] format
+    if isinstance(center, list) and len(center) == 2:
+        # If center looks like [lon, lat] (typical GEE format), swap it
+        if abs(center[0]) > 90:  # Longitude is first (GEE default)
+            center = [center[1], center[0]]
+    
+    if use_folium:
+        # Use direct Folium rendering for Streamlit Cloud
+        try:
+            m = folium.Map(location=center, zoom_start=zoom, tiles='OpenStreetMap')
+            
+            # Add satellite basemap option
+            folium.TileLayer(
+                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                attr='Esri',
+                name='Satellite',
+                overlay=False
+            ).add_to(m)
+            
+            # Get tile URL from Earth Engine
             try:
-                # Ensure EE is initialized
-                if not ensure_ee_initialized():
-                    st.warning("⚠️ GEE session needs re-initialization. Please refresh the page.")
-                    return False
-                
-                # Get tile URL directly from Earth Engine
                 map_id_dict = ee_image.getMapId(vis_params)
                 tiles_url = map_id_dict['tile_fetcher'].url_format
                 
-                # Add as TileLayer with proper show=True
-                gee_layer = folium.TileLayer(
+                # Add GEE tile layer
+                folium.TileLayer(
                     tiles=tiles_url,
                     attr='Google Earth Engine',
                     name=layer_name,
                     overlay=True,
                     control=True,
-                    opacity=0.9,
-                    show=True  # Ensure layer is visible by default
-                )
-                gee_layer.add_to(m)
-                gee_layer_added = True
-                
-            except Exception as e:
-                error_msg = str(e)
-                if "not found" in error_msg.lower() or "permission" in error_msg.lower():
-                    st.error(f"❌ GEE Permission Error: {error_msg[:150]}")
-                else:
-                    st.warning(f"⚠️ Could not load raster layer: {error_msg[:100]}")
-        
-        # Add AOI boundary if provided
-        if aoi is not None:
-            try:
-                aoi_geojson = aoi.getInfo()
-                folium.GeoJson(
-                    aoi_geojson,
-                    name='Study Area Boundary',
-                    style_function=lambda x: {
-                        'fillColor': 'transparent',
-                        'color': '#FF6600',
-                        'weight': 3,
-                        'fillOpacity': 0
-                    }
+                    show=True
                 ).add_to(m)
             except Exception as e:
-                st.warning(f"⚠️ Could not display AOI boundary: {str(e)[:50]}")
-        
-        # Add layer control - CRITICAL for layer visibility toggle
-        folium.LayerControl(position='topright', collapsed=False).add_to(m)
-        
-        # Render using st_folium for interactive map with layer control
-        # st_folium is more reliable than folium_static for complex maps
-        st_folium(m, width=700, height=height, returned_objects=[])
-        
-        # Show status message
-        if gee_layer_added:
-            st.caption(f"✅ Layer '{layer_name}' loaded successfully")
-        elif ee_image is not None:
-            st.caption("⚠️ Raster layer could not be loaded - check GEE connection")
+                st.warning(f"⚠️ Could not load GEE layer: {str(e)[:100]}")
             
-        return gee_layer_added
-        
-    except Exception as e:
-        st.error(f"❌ Map rendering error: {str(e)}")
-        import traceback
-        st.code(traceback.format_exc()[:500])
-        return False
-
-
-def render_aoi_preview_robust(aoi, center, height=300):
-    """
-    Render AOI preview using reliable Folium approach.
-    Works on Streamlit Cloud.
-    """
-    try:
-        m = folium.Map(location=center, zoom_start=11, tiles='OpenStreetMap')
-        
-        # Add satellite basemap
-        folium.TileLayer(
-            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-            attr='Esri',
-            name='Satellite'
-        ).add_to(m)
-        
-        # Add AOI boundary
-        if aoi is not None:
-            try:
-                aoi_geojson = aoi.getInfo()
-                
-                # Calculate bounds for auto-zoom
-                coords = aoi_geojson.get('coordinates', [[]])
-                if aoi_geojson.get('type') == 'Polygon':
-                    coords = coords[0]
-                elif aoi_geojson.get('type') == 'MultiPolygon':
-                    coords = coords[0][0]
-                
-                if coords and len(coords) > 0:
-                    lats = [c[1] for c in coords if len(c) >= 2]
-                    lons = [c[0] for c in coords if len(c) >= 2]
-                    if lats and lons:
-                        m.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
-                
-                folium.GeoJson(
-                    aoi_geojson,
-                    name='Study Area',
-                    style_function=lambda x: {
-                        'fillColor': '#3388ff',
-                        'color': '#0066FF',
-                        'weight': 3,
-                        'fillOpacity': 0.1
-                    }
-                ).add_to(m)
-            except Exception as e:
-                st.warning(f"⚠️ Could not display boundary: {str(e)[:50]}")
-        
-        folium.LayerControl().add_to(m)
-        folium_static(m, width=700, height=height)
-        return True
-    except Exception as e:
-        st.error(f"❌ Preview error: {str(e)}")
-        return False
+            # Add AOI boundary if provided
+            if aoi is not None:
+                try:
+                    aoi_geojson = aoi.getInfo()
+                    folium.GeoJson(
+                        aoi_geojson,
+                        name='Study Area',
+                        style_function=lambda x: {
+                            'fillColor': 'transparent',
+                            'color': '#0066FF',
+                            'weight': 3,
+                            'fillOpacity': 0
+                        }
+                    ).add_to(m)
+                except:
+                    pass
+            
+            # Add layer control
+            folium.LayerControl(position='topright').add_to(m)
+            
+            # Use st_folium for interactive map  
+            st_folium(m, width=700, height=height, returned_objects=[])
+            
+        except Exception as e:
+            st.error(f"❌ Folium map error: {str(e)}")
+    else:
+        # Use standard geemap approach (works locally)
+        try:
+            Map = geemap.Map()
+            Map.setCenter(center[1], center[0], zoom)  # geemap uses lon, lat
+            
+            if aoi is not None:
+                Map.addLayer(aoi, {'color': 'blue'}, 'Study Area', True, 0.5)
+            
+            Map.addLayer(ee_image, vis_params, layer_name, True)
+            Map.to_streamlit(height=height)
+            
+        except Exception as e:
+            st.error(f"❌ Map error: {str(e)}")
+            # Fallback to Folium
+            st.info("🔄 Trying alternative rendering...")
+            display_ee_map(center, zoom, ee_image, vis_params, layer_name, aoi, height, use_folium=True)
 
 
 
@@ -1584,21 +1521,19 @@ if page == "🛰️ Satellite Analysis":
             st.session_state.confirmed_aoi = aoi
             st.session_state.aoi_center = map_center
             st.session_state.aoi_buffer_km = current_buffer
-            # Pass aoi and buffer_km correctly to avoid crash
-            st.session_state.aoi_scale = get_scale_for_area(aoi=aoi, buffer_km=current_buffer)
+            st.session_state.aoi_scale = get_scale_for_area(current_buffer)
             st.success(f"✅ Area of Interest confirmed! (Scale: {st.session_state.aoi_scale}m)")
     
-    # Show AOI preview map (using robust Folium rendering for Streamlit Cloud)
+    # Show AOI preview map
     if 'confirmed_aoi' in st.session_state and st.session_state.confirmed_aoi is not None:
         st.markdown("**📍 Your Area of Interest:**")
         # Ensure EE is initialized before map operations (critical for Streamlit Cloud)
         if ensure_ee_initialized():
-            # Use robust Folium rendering that works on Streamlit Cloud
-            render_aoi_preview_robust(
-                st.session_state.confirmed_aoi, 
-                st.session_state.aoi_center, 
-                height=300
-            )
+            preview_map = geemap.Map(center=st.session_state.aoi_center, zoom=11)
+            # Add geometry directly with styling (no server-side image creation)
+            preview_map.addLayer(st.session_state.confirmed_aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI Boundary')
+            preview_map.centerObject(st.session_state.confirmed_aoi)
+            preview_map.to_streamlit(height=300)
         else:
             st.error("❌ GEE session expired. Please re-authenticate using the sidebar.")
     
@@ -1803,12 +1738,12 @@ if page == "🛰️ Satellite Analysis":
                 # Get map center from AOI
                 try:
                     centroid = confirmed_aoi.centroid().getInfo()['coordinates']
-                    map_center = [centroid[1], centroid[0]]
+                    map_center = [centroid[1], centroid[0]]  # [lat, lon]
                 except:
                     map_center = [39.0, -98.0]
                 
-                # Use robust Folium rendering (works reliably on Streamlit Cloud)
-                render_ee_map_robust(
+                # Display the map using smart rendering (auto-detects Streamlit Cloud)
+                display_ee_map(
                     center=map_center,
                     zoom=12,
                     ee_image=index_image,
@@ -2001,17 +1936,11 @@ if page == "🛰️ Satellite Analysis":
                             
                             with col_m1:
                                 st.markdown(f"**{compare_index_1}**")
-                                # Use robust Folium rendering for Streamlit Cloud
-                                vis_params_1 = {'bands': [band_name_1], 'min': -1, 'max': 1, 'palette': ['red', 'yellow', 'green']}
-                                render_ee_map_robust(
-                                    center=map_center,
-                                    zoom=12,
-                                    ee_image=idx_img_1,
-                                    vis_params=vis_params_1,
-                                    layer_name=compare_index_1,
-                                    aoi=confirmed_aoi,
-                                    height=400
-                                )
+                                map1 = geemap.Map(center=map_center, zoom=12, basemap="SATELLITE")
+                                # Use bands parameter for proper rendering
+                                map1.addLayer(idx_img_1, {'bands': [band_name_1], 'min': -1, 'max': 1, 'palette': ['red', 'yellow', 'green']}, compare_index_1)
+                                map1.centerObject(confirmed_aoi)
+                                map1.to_streamlit(height=400)
                                 
                                 # Stats with proper None handling
                                 mean1 = stats_1.get(f'{band_name_1}_mean') or 0
@@ -2024,17 +1953,11 @@ if page == "🛰️ Satellite Analysis":
                             
                             with col_m2:
                                 st.markdown(f"**{compare_index_2}**")
-                                # Use robust Folium rendering for Streamlit Cloud
-                                vis_params_2 = {'bands': [band_name_2], 'min': -1, 'max': 1, 'palette': ['red', 'yellow', 'green']}
-                                render_ee_map_robust(
-                                    center=map_center,
-                                    zoom=12,
-                                    ee_image=idx_img_2,
-                                    vis_params=vis_params_2,
-                                    layer_name=compare_index_2,
-                                    aoi=confirmed_aoi,
-                                    height=400
-                                )
+                                map2 = geemap.Map(center=map_center, zoom=12, basemap="SATELLITE")
+                                # Use bands parameter for proper rendering
+                                map2.addLayer(idx_img_2, {'bands': [band_name_2], 'min': -1, 'max': 1, 'palette': ['red', 'yellow', 'green']}, compare_index_2)
+                                map2.centerObject(confirmed_aoi)
+                                map2.to_streamlit(height=400)
                                 
                                 # Stats with proper None handling
                                 mean2 = stats_2.get(f'{band_name_2}_mean') or 0
@@ -2173,17 +2096,16 @@ elif page == "🔄 Compare Images":
             st.session_state.compare_aoi_center = cmp_map_center
             st.success("✅ Area of Interest confirmed!")
     
-    # Show AOI preview map (using robust Folium rendering for Streamlit Cloud)
+    # Show AOI preview map
     if 'compare_confirmed_aoi' in st.session_state and st.session_state.compare_confirmed_aoi is not None:
         st.markdown("**📍 Your Area of Interest:**")
         # Ensure EE is initialized before map operations (critical for Streamlit Cloud)
         if ensure_ee_initialized():
-            # Use robust Folium rendering that works on Streamlit Cloud
-            render_aoi_preview_robust(
-                st.session_state.compare_confirmed_aoi, 
-                st.session_state.compare_aoi_center, 
-                height=250
-            )
+            cmp_preview_map = geemap.Map(center=st.session_state.compare_aoi_center, zoom=11)
+            # Add geometry directly with styling (no server-side image creation)
+            cmp_preview_map.addLayer(st.session_state.compare_confirmed_aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI Boundary')
+            cmp_preview_map.centerObject(st.session_state.compare_confirmed_aoi)
+            cmp_preview_map.to_streamlit(height=250)
         else:
             st.error("❌ GEE session expired. Please re-authenticate using the sidebar.")
         aoi = st.session_state.compare_confirmed_aoi
@@ -2442,20 +2364,14 @@ elif page == "🔄 Compare Images":
                         
                         st.markdown(title1)
                         map_center = st.session_state.get('compare_aoi_center', [39.0, -98.0])
+                        m1 = geemap.Map(center=map_center, zoom=11)
                         
                         if img1 is not None:
                             idx1 = calculate_index_for_image(img1, selected_index, sensor1)
                             vis = {'min': -0.2, 'max': 0.8, 'palette': ['red', 'yellow', 'green']}
-                            # Use robust Folium rendering for Streamlit Cloud
-                            render_ee_map_robust(
-                                center=map_center,
-                                zoom=11,
-                                ee_image=idx1,
-                                vis_params=vis,
-                                layer_name=f'{selected_index} - Image 1',
-                                aoi=aoi,
-                                height=400
-                            )
+                            m1.addLayer(idx1, vis, f'{selected_index} - Image 1')
+                            m1.centerObject(aoi)
+                            m1.to_streamlit(height=400)
                         else:
                             st.error("Failed to load Image 1")
                     
@@ -2493,36 +2409,26 @@ elif page == "🔄 Compare Images":
                                 title2 = f"**Median Composite**\n({sensor2})"
                         
                         st.markdown(title2)
+                        m2 = geemap.Map(center=map_center, zoom=11)
                         
                         if img2 is not None:
                             idx2 = calculate_index_for_image(img2, selected_index, sensor2)
-                            # Use robust Folium rendering for Streamlit Cloud
-                            render_ee_map_robust(
-                                center=map_center,
-                                zoom=11,
-                                ee_image=idx2,
-                                vis_params=vis,
-                                layer_name=f'{selected_index} - Image 2',
-                                aoi=aoi,
-                                height=400
-                            )
+                            m2.addLayer(idx2, vis, f'{selected_index} - Image 2')
+                            m2.centerObject(aoi)
+                            m2.to_streamlit(height=400)
                         else:
                             st.error("Failed to load Image 2")
                     
                     # Difference map
                     st.subheader("5️⃣ Difference Map (Image 2 - Image 1)")
+                    m3 = geemap.Map(center=map_center, zoom=11)
                     diff = idx2.subtract(idx1).rename('Difference')
                     diff_vis = {'min': -0.3, 'max': 0.3, 'palette': ['red', 'white', 'green']}
-                    # Use robust Folium rendering for Streamlit Cloud
-                    render_ee_map_robust(
-                        center=map_center,
-                        zoom=11,
-                        ee_image=diff,
-                        vis_params=diff_vis,
-                        layer_name='NDVI Change',
-                        aoi=aoi,
-                        height=400
-                    )
+                    m3.addLayer(diff, diff_vis, 'NDVI Change')
+                    # Add geometry directly with styling (no server-side image creation)
+                    m3.addLayer(aoi, {'color': 'blue', 'fillColor': '00000000'}, 'AOI')
+                    m3.centerObject(aoi)
+                    m3.to_streamlit(height=400)
                     
                     st.info("🟢 Green = Vegetation increased | ⚪ White = No change | 🔴 Red = Vegetation decreased")
                     
