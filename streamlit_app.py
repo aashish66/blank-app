@@ -738,10 +738,7 @@ def create_ee_folium_map(center, zoom, ee_image, vis_params, layer_name, aoi=Non
 
 def display_ee_map(center, zoom, ee_image, vis_params, layer_name, aoi=None, height=500, use_folium=None):
     """
-    Display an Earth Engine map with automatic Streamlit Cloud detection.
-    
-    On Streamlit Cloud, geemap.Map().to_streamlit() sometimes fails to render GEE tile layers.
-    This function provides a robust fallback using direct Folium + GEE tile URLs.
+    Display an Earth Engine map using Folium (reliable on both local and Streamlit Cloud).
     
     Args:
         center: [lat, lon] or [lon, lat] center point
@@ -751,14 +748,12 @@ def display_ee_map(center, zoom, ee_image, vis_params, layer_name, aoi=None, hei
         layer_name: name for the layer
         aoi: optional AOI geometry to show boundary
         height: map height in pixels
-        use_folium: If True, force Folium rendering. If None, auto-detect based on environment.
+        use_folium: Deprecated, always uses Folium now
     """
-    # Auto-detect if we should use Folium (more reliable on Streamlit Cloud)
-    # Check for Streamlit Cloud environment indicators
-    is_streamlit_cloud = os.environ.get('STREAMLIT_SHARING_MODE') or os.environ.get('STREAMLIT_SERVER_ADDRESS')
-    
-    if use_folium is None:
-        use_folium = bool(is_streamlit_cloud)
+    # Ensure EE is initialized before trying to get tile URL
+    if not ensure_ee_initialized():
+        st.error("❌ GEE session not valid. Please re-authenticate.")
+        return
     
     # Ensure center is [lat, lon] format
     if isinstance(center, list) and len(center) == 2:
@@ -766,78 +761,81 @@ def display_ee_map(center, zoom, ee_image, vis_params, layer_name, aoi=None, hei
         if abs(center[0]) > 90:  # Longitude is first (GEE default)
             center = [center[1], center[0]]
     
-    if use_folium:
-        # Use direct Folium rendering for Streamlit Cloud
+    # Always use Folium for reliable rendering
+    try:
+        m = folium.Map(location=center, zoom_start=zoom, tiles='OpenStreetMap')
+        
+        # Add satellite basemap option
+        folium.TileLayer(
+            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            attr='Esri',
+            name='Satellite',
+            overlay=False
+        ).add_to(m)
+        
+        # Get tile URL from Earth Engine
+        gee_layer_added = False
         try:
-            m = folium.Map(location=center, zoom_start=zoom, tiles='OpenStreetMap')
+            # Make sure vis_params has required fields
+            if 'palette' in vis_params and isinstance(vis_params['palette'], list):
+                # Ensure palette colors don't have # prefix
+                vis_params['palette'] = [c.replace('#', '') if isinstance(c, str) else c for c in vis_params['palette']]
             
-            # Add satellite basemap option
+            map_id_dict = ee_image.getMapId(vis_params)
+            tiles_url = map_id_dict['tile_fetcher'].url_format
+            
+            # Add GEE tile layer
             folium.TileLayer(
-                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                attr='Esri',
-                name='Satellite',
-                overlay=False
+                tiles=tiles_url,
+                attr='Google Earth Engine',
+                name=layer_name,
+                overlay=True,
+                control=True,
+                show=True
             ).add_to(m)
+            gee_layer_added = True
             
-            # Get tile URL from Earth Engine
+        except Exception as e:
+            error_msg = str(e)
+            st.error(f"❌ Could not load GEE raster layer: {error_msg[:150]}")
+            # Show debug info
+            with st.expander("🔧 Debug Info"):
+                st.code(f"Error: {error_msg}\nVis params: {vis_params}")
+        
+        # Add AOI boundary if provided
+        if aoi is not None:
             try:
-                map_id_dict = ee_image.getMapId(vis_params)
-                tiles_url = map_id_dict['tile_fetcher'].url_format
-                
-                # Add GEE tile layer
-                folium.TileLayer(
-                    tiles=tiles_url,
-                    attr='Google Earth Engine',
-                    name=layer_name,
-                    overlay=True,
-                    control=True,
-                    show=True
+                aoi_geojson = aoi.getInfo()
+                folium.GeoJson(
+                    aoi_geojson,
+                    name='Study Area',
+                    style_function=lambda x: {
+                        'fillColor': 'transparent',
+                        'color': '#0066FF',
+                        'weight': 3,
+                        'fillOpacity': 0
+                    }
                 ).add_to(m)
             except Exception as e:
-                st.warning(f"⚠️ Could not load GEE layer: {str(e)[:100]}")
-            
-            # Add AOI boundary if provided
-            if aoi is not None:
-                try:
-                    aoi_geojson = aoi.getInfo()
-                    folium.GeoJson(
-                        aoi_geojson,
-                        name='Study Area',
-                        style_function=lambda x: {
-                            'fillColor': 'transparent',
-                            'color': '#0066FF',
-                            'weight': 3,
-                            'fillOpacity': 0
-                        }
-                    ).add_to(m)
-                except:
-                    pass
-            
-            # Add layer control
-            folium.LayerControl(position='topright').add_to(m)
-            
-            # Use st_folium for interactive map  
-            st_folium(m, width=700, height=height, returned_objects=[])
-            
-        except Exception as e:
-            st.error(f"❌ Folium map error: {str(e)}")
-    else:
-        # Use standard geemap approach (works locally)
-        try:
-            Map = geemap.Map()
-            Map.setCenter(center[1], center[0], zoom)  # geemap uses lon, lat
-            
-            if aoi is not None:
-                Map.addLayer(aoi, {'color': 'blue'}, 'Study Area', True, 0.5)
-            
-            Map.addLayer(ee_image, vis_params, layer_name, True)
-            Map.to_streamlit(height=height)
-            
-        except Exception as e:
-            st.error(f"❌ Map error: {str(e)}")
-            # Fallback to Folium
-            st.info("🔄 Trying alternative rendering...")
-            display_ee_map(center, zoom, ee_image, vis_params, layer_name, aoi, height, use_folium=True)
+                st.warning(f"Could not add AOI boundary: {str(e)[:50]}")
+        
+        # Add layer control
+        folium.LayerControl(position='topright').add_to(m)
+        
+        # Generate unique key for this map
+        import hashlib
+        map_key = f"map_{hashlib.md5(layer_name.encode()).hexdigest()[:8]}_{height}"
+        
+        # Use st_folium for interactive map
+        st_folium(m, width=None, height=height, returned_objects=[], key=map_key)
+        
+        if gee_layer_added:
+            st.caption(f"✅ {layer_name} layer loaded")
+        
+    except Exception as e:
+        st.error(f"❌ Map rendering error: {str(e)}")
+        with st.expander("🔧 Debug Info"):
+            st.code(f"Error: {str(e)}\nCenter: {center}\nZoom: {zoom}")
 
 
 
