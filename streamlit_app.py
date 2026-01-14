@@ -752,43 +752,63 @@ def render_ee_map_robust(center, zoom, ee_image=None, vis_params=None, layer_nam
     
     Works on Streamlit Cloud by:
     1. Using direct GEE tile URL fetching instead of geemap widgets
-    2. Using folium_static for reliable static rendering
+    2. Using st_folium for reliable interactive rendering with layer control
     """
     try:
         # Create base folium map
         m = folium.Map(
             location=center, 
             zoom_start=zoom, 
-            tiles='OpenStreetMap',
-            control_scale=True
+            tiles=None  # Start with no base tile to avoid duplicates
         )
+        
+        # Add OpenStreetMap as default base layer
+        folium.TileLayer(
+            tiles='OpenStreetMap',
+            name='OpenStreetMap',
+            control=True
+        ).add_to(m)
         
         # Add satellite basemap option
         folium.TileLayer(
             tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
             attr='Esri',
             name='Satellite',
-            overlay=False
+            control=True
         ).add_to(m)
         
         # Add GEE layer if image is provided
+        gee_layer_added = False
         if ee_image is not None and vis_params is not None:
             try:
+                # Ensure EE is initialized
+                if not ensure_ee_initialized():
+                    st.warning("⚠️ GEE session needs re-initialization. Please refresh the page.")
+                    return False
+                
                 # Get tile URL directly from Earth Engine
                 map_id_dict = ee_image.getMapId(vis_params)
                 tiles_url = map_id_dict['tile_fetcher'].url_format
                 
-                # Add as TileLayer
-                folium.TileLayer(
+                # Add as TileLayer with proper show=True
+                gee_layer = folium.TileLayer(
                     tiles=tiles_url,
                     attr='Google Earth Engine',
                     name=layer_name,
                     overlay=True,
                     control=True,
-                    opacity=0.9
-                ).add_to(m)
+                    opacity=0.9,
+                    show=True  # Ensure layer is visible by default
+                )
+                gee_layer.add_to(m)
+                gee_layer_added = True
+                
             except Exception as e:
-                st.warning(f"⚠️ Could not load raster layer: {str(e)[:100]}")
+                error_msg = str(e)
+                if "not found" in error_msg.lower() or "permission" in error_msg.lower():
+                    st.error(f"❌ GEE Permission Error: {error_msg[:150]}")
+                else:
+                    st.warning(f"⚠️ Could not load raster layer: {error_msg[:100]}")
         
         # Add AOI boundary if provided
         if aoi is not None:
@@ -796,27 +816,36 @@ def render_ee_map_robust(center, zoom, ee_image=None, vis_params=None, layer_nam
                 aoi_geojson = aoi.getInfo()
                 folium.GeoJson(
                     aoi_geojson,
-                    name='AOI Boundary',
+                    name='Study Area Boundary',
                     style_function=lambda x: {
                         'fillColor': 'transparent',
-                        'color': '#0066FF',
+                        'color': '#FF6600',
                         'weight': 3,
-                        'fillOpacity': 0,
-                        'dashArray': '5, 5'
+                        'fillOpacity': 0
                     }
                 ).add_to(m)
             except Exception as e:
                 st.warning(f"⚠️ Could not display AOI boundary: {str(e)[:50]}")
         
-        # Add layer control
-        folium.LayerControl(collapsed=False).add_to(m)
+        # Add layer control - CRITICAL for layer visibility toggle
+        folium.LayerControl(position='topright', collapsed=False).add_to(m)
         
-        # Render using folium_static (most reliable on Streamlit Cloud)
-        folium_static(m, width=700, height=height)
-        return True
+        # Render using st_folium for interactive map with layer control
+        # st_folium is more reliable than folium_static for complex maps
+        st_folium(m, width=700, height=height, returned_objects=[])
+        
+        # Show status message
+        if gee_layer_added:
+            st.caption(f"✅ Layer '{layer_name}' loaded successfully")
+        elif ee_image is not None:
+            st.caption("⚠️ Raster layer could not be loaded - check GEE connection")
+            
+        return gee_layer_added
         
     except Exception as e:
         st.error(f"❌ Map rendering error: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc()[:500])
         return False
 
 
