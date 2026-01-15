@@ -68,64 +68,90 @@ def ensure_ee_initialized():
     """
     Ensure Earth Engine is properly initialized before any EE operations.
     This is critical for Streamlit Cloud where sessions can become stale.
-    Pattern from GeoClimate-Fetcher: test with ee.Number(1).getInfo() and reinit if needed.
+    
+    Priority order:
+    1. Check if EE is already working (quick test)
+    2. Try Streamlit secrets (for Streamlit Cloud deployment)
+    3. Try session state credentials (for uploaded credentials)
+    4. Fallback to default initialization
+    
     Returns True if EE is ready, False otherwise.
     """
     # Get project ID from session state
     project_id = st.session_state.get('gee_project_id', None)
     
     try:
-        # Quick test to see if EE is ready
+        # Quick test to see if EE is already ready
         ee.Number(1).getInfo()
         return True
     except Exception:
-        # Not initialized or credentials issue - try to reinitialize
+        pass  # Not initialized, try to initialize
+    
+    # Try to reinitialize
+    try:
+        # PRIORITY 1: Try Streamlit secrets (for Streamlit Cloud)
         try:
-            # Try to reinitialize with stored credentials content
-            if 'gee_credentials_content' in st.session_state and st.session_state.gee_credentials_content:
-                creds_content = st.session_state.gee_credentials_content
-                creds_data = json.loads(creds_content) if isinstance(creds_content, str) else creds_content
-                
-                # Service account credentials
-                if 'private_key' in creds_data and 'client_email' in creds_data:
-                    import google.oauth2.service_account
-                    credentials = google.oauth2.service_account.Credentials.from_service_account_info(
-                        creds_data,
-                        scopes=['https://www.googleapis.com/auth/earthengine']
-                    )
-                    proj = project_id or creds_data.get('project_id')
-                    if proj:
-                        ee.Initialize(credentials, project=proj)
-                    else:
-                        ee.Initialize(credentials)
-                    return True
-                
-                # OAuth refresh token credentials
-                elif 'refresh_token' in creds_data:
-                    import google.oauth2.credentials
-                    credentials = google.oauth2.credentials.Credentials(
-                        token=None,
-                        refresh_token=creds_data['refresh_token'],
-                        token_uri='https://oauth2.googleapis.com/token',
-                        client_id='517222506229-vsmmajv5gipbgpkq0jvlg5830gon1p60.apps.googleusercontent.com',
-                        client_secret='d-FL95Q19q7MQmFJt7KUw2N7',
-                        scopes=['https://www.googleapis.com/auth/earthengine']
-                    )
-                    if project_id:
-                        ee.Initialize(credentials, project=project_id)
-                    else:
-                        ee.Initialize(credentials)
-                    return True
+            if hasattr(st, 'secrets') and 'gee_service_account' in st.secrets:
+                # Service account JSON as a dict in secrets
+                creds_data = dict(st.secrets['gee_service_account'])
+                import google.oauth2.service_account
+                credentials = google.oauth2.service_account.Credentials.from_service_account_info(
+                    creds_data,
+                    scopes=['https://www.googleapis.com/auth/earthengine']
+                )
+                proj = project_id or creds_data.get('project_id')
+                if proj:
+                    ee.Initialize(credentials, project=proj, opt_url='https://earthengine-highvolume.googleapis.com')
+                else:
+                    ee.Initialize(credentials, opt_url='https://earthengine-highvolume.googleapis.com')
+                return True
+        except Exception:
+            pass  # Not in secrets, try other methods
+        
+        # PRIORITY 2: Try session state credentials (uploaded by user)
+        if 'gee_credentials_content' in st.session_state and st.session_state.gee_credentials_content:
+            creds_content = st.session_state.gee_credentials_content
+            creds_data = json.loads(creds_content) if isinstance(creds_content, str) else creds_content
             
-            # Fallback: try simple reinit with project
-            if project_id:
-                ee.Initialize(project=project_id)
-            else:
-                ee.Initialize()
-            return True
-        except Exception as init_error:
-            return False
-    return False
+            # Service account credentials
+            if 'private_key' in creds_data and 'client_email' in creds_data:
+                import google.oauth2.service_account
+                credentials = google.oauth2.service_account.Credentials.from_service_account_info(
+                    creds_data,
+                    scopes=['https://www.googleapis.com/auth/earthengine']
+                )
+                proj = project_id or creds_data.get('project_id')
+                if proj:
+                    ee.Initialize(credentials, project=proj, opt_url='https://earthengine-highvolume.googleapis.com')
+                else:
+                    ee.Initialize(credentials, opt_url='https://earthengine-highvolume.googleapis.com')
+                return True
+            
+            # OAuth refresh token credentials
+            elif 'refresh_token' in creds_data:
+                import google.oauth2.credentials
+                credentials = google.oauth2.credentials.Credentials(
+                    token=None,
+                    refresh_token=creds_data['refresh_token'],
+                    token_uri='https://oauth2.googleapis.com/token',
+                    client_id='517222506229-vsmmajv5gipbgpkq0jvlg5830gon1p60.apps.googleusercontent.com',
+                    client_secret='d-FL95Q19q7MQmFJt7KUw2N7',
+                    scopes=['https://www.googleapis.com/auth/earthengine']
+                )
+                if project_id:
+                    ee.Initialize(credentials, project=project_id, opt_url='https://earthengine-highvolume.googleapis.com')
+                else:
+                    ee.Initialize(credentials, opt_url='https://earthengine-highvolume.googleapis.com')
+                return True
+        
+        # PRIORITY 3: Fallback to default initialization
+        if project_id:
+            ee.Initialize(project=project_id)
+        else:
+            ee.Initialize()
+        return True
+    except Exception as init_error:
+        return False
 
 def initialize_with_refresh_token(cred_data, project_id=None):
     """Initialize GEE using refresh token or service account credentials from uploaded file"""
