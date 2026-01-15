@@ -1808,20 +1808,8 @@ if page == "🛰️ Satellite Analysis":
                 }
                 scale = sensor_scale_map.get(sensor, 30)
                 
-                # Calculate statistics for visualization range (exactly like V2)
-                stats = index_image.reduceRegion(
-                    reducer=ee.Reducer.percentile([5, 95]),
-                    geometry=confirmed_aoi,
-                    scale=scale,
-                    maxPixels=1e9
-                ).getInfo()
-                
-                # Get band name (exactly like V2)
+                # Get band name first
                 band_name = index_image.bandNames().getInfo()[0]
-                
-                # Get vis params (exactly like V2)
-                vmin_raw = stats.get(f'{band_name}_p5')
-                vmax_raw = stats.get(f'{band_name}_p95')
                 
                 # Default vis params for each index (V2 pattern)
                 veg_palette = ['d73027', 'fc8d59', 'fee08b', 'd9ef8b', '91cf60', '1a9850']
@@ -1833,12 +1821,27 @@ if page == "🛰️ Satellite Analysis":
                 }
                 default_vmin, default_vmax, palette = index_defaults.get(selected_index, (-0.2, 0.8, veg_palette))
                 
-                if vmin_raw is None or vmax_raw is None:
-                    st.warning("⚠️ No data found for this area. Try using a composite or different dates.")
-                    vmin, vmax = default_vmin, default_vmax
-                else:
-                    vmin = vmin_raw
-                    vmax = vmax_raw
+                # Calculate statistics for visualization range - with robust fallback
+                # Use try-catch to avoid warning when stats fail but map works fine
+                vmin, vmax = default_vmin, default_vmax
+                try:
+                    stats = index_image.reduceRegion(
+                        reducer=ee.Reducer.percentile([5, 95]),
+                        geometry=confirmed_aoi,
+                        scale=scale,
+                        maxPixels=1e9,
+                        bestEffort=True  # Let GEE adjust scale if needed
+                    ).getInfo()
+                    
+                    vmin_raw = stats.get(f'{band_name}_p5')
+                    vmax_raw = stats.get(f'{band_name}_p95')
+                    
+                    if vmin_raw is not None and vmax_raw is not None:
+                        vmin = vmin_raw
+                        vmax = vmax_raw
+                    # Note: No warning if stats fail - just use defaults silently
+                except Exception:
+                    pass  # Silently use defaults if stats calculation fails
                 
                 vis_params = {
                     'bands': [band_name],
