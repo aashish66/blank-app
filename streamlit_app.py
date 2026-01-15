@@ -1773,35 +1773,39 @@ if page == "🛰️ Satellite Analysis":
                 # Calculate index
                 index_image = calculate_index_for_image(image, selected_index, sensor)
                 
-                # Use user-selected resolution (from slider above)
-                scale = user_resolution
+                # Get the band name from the index image
+                band_name = index_image.bandNames().getInfo()[0]
                 
-                # Get dynamic min/max using percentiles
+                # Calculate adaptive scale for stats based on AOI size (like ref app)
+                try:
+                    area_km2 = st.session_state.get('aoi_area_sqkm', 500)  # Use stored area
+                    if area_km2 > 50000:  # Very large
+                        stats_scale = 5000  # 5km for stats
+                    elif area_km2 > 10000:  # Large
+                        stats_scale = 2000  # 2km for stats
+                    elif area_km2 > 1000:  # Medium
+                        stats_scale = 500   # 500m for stats
+                    else:  # Small
+                        stats_scale = 100   # 100m for stats
+                except:
+                    stats_scale = 500  # Default
+                
+                # Get dynamic min/max using percentiles with adaptive scale
                 stats = index_image.reduceRegion(
                     reducer=ee.Reducer.percentile([5, 95]),
                     geometry=confirmed_aoi,
-                    scale=scale,
-                    maxPixels=1e9
+                    scale=stats_scale,  # Use adaptive scale for stats (not visualization scale)
+                    maxPixels=1e9,
+                    bestEffort=True  # Allow GEE to adjust if needed
                 ).getInfo()
-                
-                # Get the band name from the index image
-                band_name = index_image.bandNames().getInfo()[0]
                 
                 # Check if stats are empty (indicates no data coverage)
                 vmin_raw = stats.get(f'{band_name}_p5') or stats.get(f'{selected_index}_p5')
                 vmax_raw = stats.get(f'{band_name}_p95') or stats.get(f'{selected_index}_p95')
                 
                 if vmin_raw is None or vmax_raw is None:
-                    st.warning("""⚠️ **No data found for this area!** This usually means:
-                    1. The satellite scenes don't fully cover your area
-                    2. Cloud cover removed all valid pixels
-                    
-                    **Try these solutions:**
-                    - Use **Median Composite** mode (combines multiple images)
-                    - Reduce buffer/area size
-                    - Switch to **MODIS** sensor (better coverage for large areas)
-                    - Extend date range to include more images
-                    """)
+                    # Simple warning like V2 - don't block the map
+                    st.warning("⚠️ No data found for statistics. Using default visualization range. Try a composite or different dates.")
                     vmin = -0.2
                     vmax = 0.8
                 else:
@@ -1834,7 +1838,7 @@ if page == "🛰️ Satellite Analysis":
                     height=500
                 )
                 
-                st.success(f"✅ {selected_index} map generated successfully! (Resolution: {scale}m)")
+                st.success(f"✅ {selected_index} map generated successfully! (Resolution: {user_resolution}m)")
                 
                 # Legend with actual values
                 st.markdown(f"""
