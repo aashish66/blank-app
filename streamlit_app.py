@@ -819,24 +819,15 @@ def display_ee_map(center, zoom, ee_image, vis_params, layer_name, aoi=None, hei
             except Exception as e:
                 st.warning(f"Could not add AOI boundary: {str(e)[:50]}")
         
-        # Add layer control
-        folium.LayerControl(position='topright').add_to(m)
+        # Add layer control (collapsed=False for visibility)
+        folium.LayerControl(position='topright', collapsed=False).add_to(m)
         
-        # Render map using HTML components (most reliable on Streamlit Cloud)
-        from streamlit.components.v1 import html
+        # Generate unique key using timestamp to avoid duplicate key issues
+        import time
+        map_key = f"map_{layer_name.replace(' ', '_')}_{int(time.time() * 1000) % 100000}"
         
-        # Get the HTML representation of the map
-        map_html = m._repr_html_()
-        
-        # Wrap in a div with explicit dimensions
-        html_content = f"""
-        <div style="width:100%; height:{height}px;">
-            {map_html}
-        </div>
-        """
-        
-        # Display using HTML component
-        html(html_content, height=height + 20)
+        # Render using st_folium with explicit width (matching V2 exactly)
+        st_folium(m, width=700, height=height, key=map_key, returned_objects=[])
         
         if gee_layer_added:
             st.caption(f"✅ {layer_name} layer loaded")
