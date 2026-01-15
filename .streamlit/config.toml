@@ -1,19 +1,12 @@
-# Streamlit Configuration - Performance Optimizations
-# This configuration file optimizes AgriVision Pro for speed and reliability
-
 [client]
-# Minimal toolbar for performance
 toolbarMode = "minimal"
-# Disable unnecessary warnings
 showErrorDetails = false
 
 [logger]
-# Only show errors
 level = "error"
 
 [server]
-# Reduce server memory usage
-maxUploadSize = 200  # MB
+maxUploadSize = 200
 
 [theme]
 primaryColor = "#2ecc71"
